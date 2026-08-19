@@ -105,10 +105,9 @@ static void loadConfig();
 // 悬浮窗拖动 (方法名加前缀防和 app 内其他 UIButton category 冲突)
 @interface UIButton (IBoxFloatDrag)
 - (void)ibox_handlePan:(UIPanGestureRecognizer*)pan;
-@end
 
 // ---------------------------------------------------------------------------
-//  音量键触发的编辑面板 (取代 Files app 改 JSON 的破操作)
+//  悬浮窗触发的编辑面板 (取代 Files app 改 JSON 的破操作)
 // ---------------------------------------------------------------------------
 @interface RuleEditorPanel : UIViewController <UITextViewDelegate>
 @property (nonatomic, strong) UIWindow *panelWindow;
