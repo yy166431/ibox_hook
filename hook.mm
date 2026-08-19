@@ -463,6 +463,9 @@ static void onAddText(void* address, DobbyRegisterContext* ctx) {
 // ---------------------------------------------------------------------------
 __attribute__((constructor))
 static void init() {
+    // 最优先: 初始化全局变量,防止多线程竞态导致空指针
+    initGlobals();
+
     LOG(@"加载中...");
 
     // 找 Flutter.framework 基址
