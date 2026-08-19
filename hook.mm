@@ -65,15 +65,30 @@ struct UTF16Buf {
 };
 
 // ---------------------------------------------------------------------------
-//  规则
+//  规则 (函数内static避免初始化顺序问题)
 // ---------------------------------------------------------------------------
 struct RegexRule { std::regex re; std::string rep; };
 
-static std::map<std::string, std::string> g_exact;   // 精确整串匹配 (UTF-8)
-static std::vector<RegexRule>             g_regex;   // 正则替换 (UTF-8)
-static std::string                        g_wallet;  // 钱包地址统一替换
-static time_t                             g_cfg_mtime = 0;
-static dispatch_queue_t                   g_cfg_q;
+static std::map<std::string, std::string>& g_exact() {
+    static std::map<std::string, std::string> m;
+    return m;
+}
+static std::vector<RegexRule>& g_regex() {
+    static std::vector<RegexRule> v;
+    return v;
+}
+static std::string& g_wallet() {
+    static std::string s;
+    return s;
+}
+static time_t& g_cfg_mtime() {
+    static time_t t = 0;
+    return t;
+}
+static dispatch_queue_t& g_cfg_q() {
+    static dispatch_queue_t q = dispatch_queue_create("ibox.hook.cfg", DISPATCH_QUEUE_SERIAL);
+    return q;
+}
 
 static NSString* configPath() {
     return [NSHomeDirectory() stringByAppendingPathComponent:@"Documents/ibox_hook_rules.json"];
@@ -124,7 +139,7 @@ static void loadConfig() {
     NSString* path = configPath();
     NSDictionary* attr = [[NSFileManager defaultManager] attributesOfItemAtPath:path error:nil];
     time_t mtime = (time_t)[[attr fileModificationDate] timeIntervalSince1970];
-    if (mtime == g_cfg_mtime) return;  // 没变
+    if (mtime == g_cfg_mtime()) return;  // 没变
 
     NSData* data = [NSData dataWithContentsOfFile:path];
     if (!data) return;
@@ -156,11 +171,11 @@ static void loadConfig() {
     NSString* w = json[@"wallet"];
     if ([w isKindOfClass:[NSString class]]) wallet = [w UTF8String];
 
-    dispatch_sync(g_cfg_q, ^{
-        g_exact  = exact;
-        g_regex  = regex;
-        g_wallet = wallet;
-        g_cfg_mtime = mtime;
+    dispatch_sync(g_cfg_q(), ^{
+        g_exact()  = exact;
+        g_regex()  = regex;
+        g_wallet() = wallet;
+        g_cfg_mtime() = mtime;
     });
     LOG(@"配置加载: 精确%lu 正则%lu 钱包%s", exact.size(), regex.size(),
         wallet.empty() ? "无" : wallet.c_str());
@@ -183,7 +198,7 @@ static bool applyRules(const std::string& in, std::string& out) {
     __block std::map<std::string,std::string> exact;
     __block std::vector<RegexRule> regex;
     __block std::string wallet;
-    dispatch_sync(g_cfg_q, ^{ exact = g_exact; regex = g_regex; wallet = g_wallet; });
+    dispatch_sync(g_cfg_q(), ^{ exact = g_exact(); regex = g_regex(); wallet = g_wallet(); });
 
     // 1) 精确整串
     auto it = exact.find(in);
@@ -228,7 +243,6 @@ static void onAddText(void* address, DobbyRegisterContext* ctx) {
 __attribute__((constructor))
 static void init() {
     LOG(@"加载中...");
-    g_cfg_q = dispatch_queue_create("ibox.hook.cfg", DISPATCH_QUEUE_SERIAL);
 
     // 找 Flutter.framework 基址
     uintptr_t base = 0;
