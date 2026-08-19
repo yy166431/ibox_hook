@@ -14,6 +14,9 @@
 //  作者: 海鸥
 // ============================================================================
 #import <Foundation/Foundation.h>
+#import <UIKit/UIKit.h>
+#import <MediaPlayer/MediaPlayer.h>
+#import <AVFoundation/AVFoundation.h>
 #include <dlfcn.h>
 #include <mach-o/dyld.h>
 #include <string>
@@ -89,6 +92,206 @@ static dispatch_queue_t& g_cfg_q() {
     static dispatch_queue_t q = dispatch_queue_create("ibox.hook.cfg", DISPATCH_QUEUE_SERIAL);
     return q;
 }
+
+static NSString* configPath() {
+    return [NSHomeDirectory() stringByAppendingPathComponent:@"Documents/ibox_hook_rules.json"];
+}
+
+// ---------------------------------------------------------------------------
+//  音量键触发的编辑面板 (取代 Files app 改 JSON 的破操作)
+// ---------------------------------------------------------------------------
+@interface RuleEditorPanel : UIViewController <UITextViewDelegate>
+@property (nonatomic, strong) UIWindow *panelWindow;
+@property (nonatomic, strong) UITextView *walletField;
+@property (nonatomic, strong) UITextView *exactField;
+@property (nonatomic, strong) UITextView *regexField;
+@end
+
+@implementation RuleEditorPanel
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.view.backgroundColor = [UIColor colorWithWhite:0.1 alpha:0.95];
+
+    // 顶部标题
+    UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(20, 50, self.view.bounds.size.width-40, 40)];
+    title.text = @"爱盒 Hook 规则编辑器";
+    title.textColor = [UIColor whiteColor];
+    title.font = [UIFont boldSystemFontOfSize:20];
+    title.textAlignment = NSTextAlignmentCenter;
+    [self.view addSubview:title];
+
+    CGFloat y = 100;
+
+    // 钱包地址
+    [self addLabel:@"钱包地址 (0x开头, 替换所有钱包)" atY:y];
+    y += 25;
+    self.walletField = [self makeTextViewAtY:y height:40];
+    self.walletField.font = [UIFont monospacedSystemFontOfSize:14 weight:UIFontWeightRegular];
+    y += 50;
+
+    // 精确替换
+    [self addLabel:@"精确替换 (每行: 原文=>新文)" atY:y];
+    y += 25;
+    self.exactField = [self makeTextViewAtY:y height:150];
+    y += 160;
+
+    // 正则替换
+    [self addLabel:@"正则替换 (每行: pattern=>replace, UTF-8)" atY:y];
+    y += 25;
+    self.regexField = [self makeTextViewAtY:y height:150];
+    y += 160;
+
+    // 底部按钮
+    UIButton *saveBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    saveBtn.frame = CGRectMake(20, y, (self.view.bounds.size.width-50)/2, 50);
+    [saveBtn setTitle:@"保存" forState:UIControlStateNormal];
+    saveBtn.titleLabel.font = [UIFont boldSystemFontOfSize:18];
+    saveBtn.backgroundColor = [UIColor colorWithRed:0.2 green:0.6 blue:1.0 alpha:1.0];
+    [saveBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    saveBtn.layer.cornerRadius = 8;
+    [saveBtn addTarget:self action:@selector(saveAndClose) forControlEvents:UIControlEventTouchUpInside];
+    [self.view addSubview:saveBtn];
+
+    UIButton *closeBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    closeBtn.frame = CGRectMake(30 + (self.view.bounds.size.width-50)/2, y, (self.view.bounds.size.width-50)/2, 50);
+    [closeBtn setTitle:@"关闭" forState:UIControlStateNormal];
+    closeBtn.titleLabel.font = [UIFont boldSystemFontOfSize:18];
+    closeBtn.backgroundColor = [UIColor colorWithWhite:0.3 alpha:1.0];
+    [closeBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    closeBtn.layer.cornerRadius = 8;
+    [closeBtn addTarget:self action:@selector(closePanel) forControlEvents:UIControlEventTouchUpInside];
+    [self.view addSubview:closeBtn];
+
+    [self loadCurrentRules];
+}
+
+- (void)addLabel:(NSString*)text atY:(CGFloat)y {
+    UILabel *lbl = [[UILabel alloc] initWithFrame:CGRectMake(20, y, self.view.bounds.size.width-40, 20)];
+    lbl.text = text;
+    lbl.textColor = [UIColor colorWithWhite:0.8 alpha:1.0];
+    lbl.font = [UIFont systemFontOfSize:14];
+    [self.view addSubview:lbl];
+}
+
+- (UITextView*)makeTextViewAtY:(CGFloat)y height:(CGFloat)h {
+    UITextView *tv = [[UITextView alloc] initWithFrame:CGRectMake(20, y, self.view.bounds.size.width-40, h)];
+    tv.backgroundColor = [UIColor colorWithWhite:0.2 alpha:1.0];
+    tv.textColor = [UIColor whiteColor];
+    tv.font = [UIFont systemFontOfSize:14];
+    tv.layer.cornerRadius = 6;
+    tv.layer.borderWidth = 1;
+    tv.layer.borderColor = [UIColor colorWithWhite:0.4 alpha:1.0].CGColor;
+    tv.autocorrectionType = UITextAutocorrectionTypeNo;
+    tv.autocapitalizationType = UITextAutocapitalizationTypeNone;
+    tv.delegate = self;
+    [self.view addSubview:tv];
+    return tv;
+}
+
+- (void)loadCurrentRules {
+    NSString *path = configPath();
+    NSData *data = [NSData dataWithContentsOfFile:path];
+    if (!data) return;
+    NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+    if (![json isKindOfClass:[NSDictionary class]]) return;
+
+    // 钱包
+    self.walletField.text = json[@"wallet"] ?: @"";
+
+    // 精确
+    NSMutableArray *exactLines = [NSMutableArray array];
+    NSDictionary *exact = json[@"exact"];
+    if ([exact isKindOfClass:[NSDictionary class]]) {
+        for (NSString *k in exact) {
+            [exactLines addObject:[NSString stringWithFormat:@"%@=>%@", k, exact[k]]];
+        }
+    }
+    self.exactField.text = [exactLines componentsJoinedByString:@"\n"];
+
+    // 正则
+    NSMutableArray *regexLines = [NSMutableArray array];
+    NSArray *regex = json[@"regex"];
+    if ([regex isKindOfClass:[NSArray class]]) {
+        for (NSDictionary *r in regex) {
+            NSString *p = r[@"pattern"], *rep = r[@"replace"];
+            if (p && rep) [regexLines addObject:[NSString stringWithFormat:@"%@=>%@", p, rep]];
+        }
+    }
+    self.regexField.text = [regexLines componentsJoinedByString:@"\n"];
+}
+
+- (void)saveAndClose {
+    NSMutableDictionary *json = [NSMutableDictionary dictionary];
+    json[@"_说明"] = @"音量键编辑面板生成, 无需手动改 JSON";
+
+    // 钱包
+    NSString *wallet = [self.walletField.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (wallet.length > 0) json[@"wallet"] = wallet;
+
+    // 精确
+    NSMutableDictionary *exact = [NSMutableDictionary dictionary];
+    NSArray *exactLines = [self.exactField.text componentsSeparatedByString:@"\n"];
+    for (NSString *line in exactLines) {
+        NSArray *parts = [line componentsSeparatedByString:@"=>"];
+        if (parts.count == 2) {
+            NSString *k = [parts[0] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+            NSString *v = [parts[1] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+            if (k.length > 0 && v.length > 0) exact[k] = v;
+        }
+    }
+    if (exact.count > 0) json[@"exact"] = exact;
+
+    // 正则
+    NSMutableArray *regex = [NSMutableArray array];
+    NSArray *regexLines = [self.regexField.text componentsSeparatedByString:@"\n"];
+    for (NSString *line in regexLines) {
+        NSArray *parts = [line componentsSeparatedByString:@"=>"];
+        if (parts.count == 2) {
+            NSString *p = [parts[0] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+            NSString *r = [parts[1] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+            if (p.length > 0 && r.length > 0) {
+                [regex addObject:@{@"pattern": p, @"replace": r}];
+            }
+        }
+    }
+    if (regex.count > 0) json[@"regex"] = regex;
+
+    NSData *data = [NSJSONSerialization dataWithJSONObject:json options:NSJSONWritingPrettyPrinted error:nil];
+    [data writeToFile:configPath() atomically:YES];
+
+    // 立即重载配置
+    loadConfig();
+
+    LOG(@"规则已保存并生效: 精确%lu 正则%lu 钱包%@",
+        (unsigned long)exact.count, (unsigned long)regex.count, wallet.length > 0 ? wallet : @"无");
+
+    [self closePanel];
+}
+
+- (void)closePanel {
+    [self.panelWindow resignKeyWindow];
+    self.panelWindow.hidden = YES;
+    self.panelWindow = nil;
+}
+
++ (void)toggle {
+    static RuleEditorPanel *instance = nil;
+    if (instance && instance.panelWindow && !instance.panelWindow.hidden) {
+        [instance closePanel];
+        instance = nil;
+        return;
+    }
+
+    instance = [[RuleEditorPanel alloc] init];
+    UIWindow *win = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
+    win.windowLevel = UIWindowLevelAlert + 100;
+    win.rootViewController = instance;
+    instance.panelWindow = win;
+    [win makeKeyAndVisible];
+}
+
+@end
 
 static NSString* configPath() {
     return [NSHomeDirectory() stringByAppendingPathComponent:@"Documents/ibox_hook_rules.json"];
@@ -270,4 +473,17 @@ static void init() {
     void* target = (void*)(base + RVA_ADDTEXT_BLR);
     int r = DobbyInstrument(target, onAddText);
     LOG(@"Hook @ 0x%lx (RVA 0x%lx) 结果=%d", (uintptr_t)target, RVA_ADDTEXT_BLR, r);
+
+    // 监听音量键, 弹编辑面板
+    [[NSNotificationCenter defaultCenter] addObserverForName:@"AVSystemController_SystemVolumeDidChangeNotification"
+                                                      object:nil
+                                                       queue:[NSOperationQueue mainQueue]
+                                                  usingBlock:^(NSNotification *note) {
+        NSString *reason = note.userInfo[@"AVSystemController_AudioVolumeChangeReasonNotificationParameter"];
+        // ExplicitVolumeChange = 用户按了音量键 (非app代码调整)
+        if ([reason isEqualToString:@"ExplicitVolumeChange"]) {
+            [RuleEditorPanel toggle];
+        }
+    }];
+    LOG(@"音量键面板已就绪, 按音量+/-打开编辑器");
 }
