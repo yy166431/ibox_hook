@@ -551,3 +551,4 @@ static void init() {
     win.frame = f;
     [pan setTranslation:CGPointZero inView:self.superview];
 }
+@end
