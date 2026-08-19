@@ -102,6 +102,11 @@ static NSString* configPath() {
 // 前向声明，RuleEditorPanel 需要
 static void loadConfig();
 
+// 悬浮窗拖动 (方法名加前缀防和 app 内其他 UIButton category 冲突)
+@interface UIButton (IBoxFloatDrag)
+- (void)ibox_handlePan:(UIPanGestureRecognizer*)pan;
+@end
+
 // ---------------------------------------------------------------------------
 //  音量键触发的编辑面板 (取代 Files app 改 JSON 的破操作)
 // ---------------------------------------------------------------------------
@@ -290,7 +295,7 @@ static void loadConfig();
 
     instance = [[RuleEditorPanel alloc] init];
     UIWindow *win = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
-    win.windowLevel = UIWindowLevelAlert + 100;
+    win.windowLevel = UIWindowLevelAlert + 300;  // 比悬浮窗(+200)高，防止被盖住
     win.rootViewController = instance;
     instance.panelWindow = win;
     [win makeKeyAndVisible];
@@ -475,37 +480,74 @@ static void init() {
     int r = DobbyInstrument(target, onAddText);
     LOG(@"Hook @ 0x%lx (RVA 0x%lx) 结果=%d", (uintptr_t)target, RVA_ADDTEXT_BLR, r);
 
-    // 监听摇一摇, 弹编辑面板 (音量键私有API自签可能不生效, 改用摇一摇)
-    [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidBecomeActiveNotification
-                                                      object:nil
-                                                       queue:[NSOperationQueue mainQueue]
-                                                  usingBlock:^(NSNotification *note) {
-        NSArray *windows = [UIApplication sharedApplication].windows;
-        UIWindow *keyWin = nil;
-        for (UIWindow *w in windows) {
-            if (w.isKeyWindow) { keyWin = w; break; }
-        }
-        if (!keyWin) keyWin = windows.firstObject;
-        if (keyWin && ![keyWin.rootViewController isKindOfClass:[RuleEditorPanel class]]) {
-            // 给主窗口加摇一摇响应
-            [keyWin becomeFirstResponder];
-        }
-    }];
+    // 悬浮窗按钮 (截图录屏自动隐藏)
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 3ull * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+        static UIWindow *floatWin = nil;
+        static UIButton *floatBtn = nil;
 
-    // 全局监听摇一摇手势 (method swizzle UIWindow.motionEnded)
-    Class winCls = [UIWindow class];
-    SEL motionSel = @selector(motionEnded:withEvent:);
-    Method origM = class_getInstanceMethod(winCls, motionSel);
-    if (origM) {
-        IMP origIMP = method_getImplementation(origM);
-        IMP newIMP = imp_implementationWithBlock(^(UIWindow *self, UIEventSubtype motion, UIEvent *event) {
-            ((void(*)(id,SEL,UIEventSubtype,UIEvent*))origIMP)(self, motionSel, motion, event);
-            if (motion == UIEventSubtypeMotionShake) {
-                [RuleEditorPanel toggle];
-            }
-        });
-        method_setImplementation(origM, newIMP);
-    }
+        if (!floatWin) {
+            floatWin = [[UIWindow alloc] initWithFrame:CGRectMake([UIScreen mainScreen].bounds.size.width - 70, 100, 60, 60)];
+            floatWin.windowLevel = UIWindowLevelAlert + 200;
+            floatWin.backgroundColor = [UIColor clearColor];
+            floatWin.rootViewController = [[UIViewController alloc] init];
+            floatWin.hidden = NO;
 
-    LOG(@"摇一摇面板已就绪, 摇晃设备打开编辑器");
+            floatBtn = [UIButton buttonWithType:UIButtonTypeCustom];
+            floatBtn.frame = CGRectMake(0, 0, 60, 60);
+            floatBtn.backgroundColor = [UIColor colorWithRed:0.2 green:0.6 blue:1.0 alpha:0.8];
+            floatBtn.layer.cornerRadius = 30;
+            [floatBtn setTitle:@"爱盒\nHook" forState:UIControlStateNormal];
+            floatBtn.titleLabel.font = [UIFont boldSystemFontOfSize:12];
+            floatBtn.titleLabel.numberOfLines = 2;
+            floatBtn.titleLabel.textAlignment = NSTextAlignmentCenter;
+            [floatBtn addTarget:[RuleEditorPanel class] action:@selector(toggle) forControlEvents:UIControlEventTouchUpInside];
+            [floatWin.rootViewController.view addSubview:floatBtn];
+
+            // 可拖动
+            UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:floatBtn action:@selector(ibox_handlePan:)];
+            [floatBtn addGestureRecognizer:pan];
+
+            objc_setAssociatedObject(floatBtn, "floatWin", floatWin, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+
+        // 监听截图
+        [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationUserDidTakeScreenshotNotification
+                                                          object:nil
+                                                           queue:[NSOperationQueue mainQueue]
+                                                      usingBlock:^(NSNotification *note) {
+            floatWin.hidden = YES;
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2ull * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+                floatWin.hidden = NO;
+            });
+        }];
+
+        // 监听录屏 (iOS 11+ 有 isCaptured)
+        if (@available(iOS 11.0, *)) {
+            [NSTimer scheduledTimerWithTimeInterval:0.5 repeats:YES block:^(NSTimer *t) {
+                BOOL recording = [UIScreen mainScreen].isCaptured;
+                floatWin.hidden = recording;
+            }];
+        }
+
+        LOG(@"悬浮窗已就绪, 点击打开编辑器");
+    });
+}
+
+// 悬浮窗拖动 category 实现 (接口已在文件前部前置声明)
+@implementation UIButton (IBoxFloatDrag)
+- (void)ibox_handlePan:(UIPanGestureRecognizer*)pan {
+    UIWindow *win = objc_getAssociatedObject(self, "floatWin");
+    if (!win) return;
+    CGPoint translation = [pan translationInView:self.superview];
+    CGRect f = win.frame;
+    f.origin.x += translation.x;
+    f.origin.y += translation.y;
+    // 防止飞出屏幕
+    CGSize screen = [UIScreen mainScreen].bounds.size;
+    if (f.origin.x < 0) f.origin.x = 0;
+    if (f.origin.y < 0) f.origin.y = 0;
+    if (f.origin.x + f.size.width > screen.width) f.origin.x = screen.width - f.size.width;
+    if (f.origin.y + f.size.height > screen.height) f.origin.y = screen.height - f.size.height;
+    win.frame = f;
+    [pan setTranslation:CGPointZero inView:self.superview];
 }

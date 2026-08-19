@@ -1,0 +1,178 @@
+{"app_name":"Runner","timestamp":"2026-08-19 17:07:37.00 +0800","app_version":"3.0.6","slice_uuid":"ac1dbd24-e1ea-3b84-a95c-04a86b1172f1","adam_id":"6752760761","build_version":"30006","platform":2,"bundleID":"com.aihe.abc","share_with_app_devs":0,"is_first_party":0,"bug_type":"309","os_version":"iPhone OS 15.3.1 (19D52)","incident_id":"532CDD19-137A-45F5-8E96-2D96E38E9CE4","name":"Runner"}
+{
+  "uptime" : 160000,
+  "procLaunch" : "2026-08-19 17:07:37.0904 +0800",
+  "procRole" : "Foreground",
+  "version" : 2,
+  "userID" : 501,
+  "deployVersion" : 210,
+  "modelCode" : "iPhone11,8",
+  "procStartAbsTime" : 3924595013684,
+  "coalitionID" : 1192,
+  "osVersion" : {
+    "isEmbedded" : true,
+    "train" : "iPhone OS 15.3.1",
+    "releaseType" : "User",
+    "build" : "19D52"
+  },
+  "captureTime" : "2026-08-19 17:07:37.3632 +0800",
+  "incident" : "532CDD19-137A-45F5-8E96-2D96E38E9CE4",
+  "bug_type" : "309",
+  "pid" : 1311,
+  "procExitAbsTime" : 3924601549523,
+  "cpuType" : "ARM-64",
+  "procName" : "Runner",
+  "procPath" : "\/private\/var\/containers\/Bundle\/Application\/2404ABB1-988F-4357-B2CE-98EC072B9F6A\/Runner.app\/Runner",
+  "bundleInfo" : {"CFBundleShortVersionString":"3.0.6","CFBundleVersion":"30006","CFBundleIdentifier":"com.aihe.abc","DTAppStoreToolsBuild":"17F106"},
+  "storeInfo" : {"storeCohortMetadata":"10|date=1787110200000&sf=143465&app=com.apple.AppStore&pgtp=Search&pgid=4e37a366-e5a1-41ae-b465-98da57fbda76&prpg=Genre_179183&ctxt=Search&issrch=1&imptyp=card&kind=iosSoftware&itpltyp=PI3&lngid=19","itemID":"6752760761","deviceIdentifierForVendor":"8B815B7D-0360-4F85-9016-C3DE208AA420","softwareVersionExternalIdentifier":"889765006","thirdParty":true,"applicationVariant":"1:iPhone11,8:15"},
+  "parentProc" : "launchd",
+  "parentPid" : 1,
+  "coalitionName" : "com.aihe.abc",
+  "crashReporterKey" : "01ab1da99ac9991fcceabc26322481a7a8c9f75a",
+  "basebandVersion" : "4.02.02",
+  "vmRegionInfo" : "0 is not in any region.  Bytes before following region: 4308713472\n      REGION TYPE                 START - END      [ VSIZE] PRT\/MAX SHRMOD  REGION DETAIL\n      UNUSED SPACE AT START\n--->  \n      __TEXT                   100d1c000-100f24000 [ 2080K] r-x\/r-x SM=COW  ...er.app\/Runner",
+  "isCorpse" : 1,
+  "exception" : {"codes":"0x0000000000000001, 0x0000000000000000","rawCodes":[1,0],"type":"EXC_BAD_ACCESS","signal":"SIGSEGV","subtype":"KERN_INVALID_ADDRESS at 0x0000000000000000"},
+  "termination" : {"flags":0,"code":11,"namespace":"SIGNAL","indicator":"Segmentation fault: 11","byProc":"exc handler","byPid":1311},
+  "vmregioninfo" : "0 is not in any region.  Bytes before following region: 4308713472\n      REGION TYPE                 START - END      [ VSIZE] PRT\/MAX SHRMOD  REGION DETAIL\n      UNUSED SPACE AT START\n--->  \n      __TEXT                   100d1c000-100f24000 [ 2080K] r-x\/r-x SM=COW  ...er.app\/Runner",
+  "faultingThread" : 0,
+  "threads" : [{"triggered":true,"id":559195,"threadState":{"x":[{"value":4332652088,"symbolLocation":8,"symbol":"g_exact"},{"value":6158144808},{"value":6158144976},{"value":10741025232},{"value":49},{"value":16},{"value":56},{"value":10786115681},{"value":4332652088,"symbolLocation":8,"symbol":"g_exact"},{"value":0},{"value":2480},{"value":1},{"value":2617597947},{"value":470112256},{"value":469762048},{"value":7958430736,"symbolLocation":0,"symbol":"OBJC_CLASS_$___NSCFString"},{"value":6869301176,"symbolLocation":0,"symbol":"std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> >::basic_string(std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > const&)"},{"value":2301},{"value":0},{"value":10752568704},{"value":4330325600,"symbolLocation":224,"symbol":"_main_thread"},{"value":4332388572,"symbolLocation":0,"symbol":"init()"},{"value":4332606844,"symbolLocation":0,"symbol":"GCC_except_table8"},{"value":4332372024},{"value":4332372392},{"value":6158147712},{"value":4332372952},{"value":5136},{"value":4330589296}],"flavor":"ARM_THREAD_STATE64","lr":{"value":4332518400},"cpsr":{"value":536870912},"fp":{"value":6158144672},"sp":{"value":6158144624},"esr":{"value":2449473542,"description":"(Data Abort) byte read Translation fault"},"pc":{"value":4332401276,"matchesCrashFrame":1},"far":{"value":0}},"queue":"ibox.hook.cfg","frames":[{"imageOffset":29308,"symbol":"bool std::__1::__tree_is_left_child[abi:nqe210106]<std::__1::__tree_node_base<void*>*>(std::__1::__tree_node_base<void*>*)","symbolLocation":20,"imageIndex":0},{"imageOffset":146432,"symbol":"std::__1::__tree_node_base<void*>* std::__1::__tree_prev_iter[abi:nqe210106]<std::__1::__tree_node_base<void*>*, std::__1::__tree_end_node<std::__1::__tree_node_base<void*>*>*>(std::__1::__tree_end_node<std::__1::__tree_node_base<void*>*>*)","symbolLocation":72,"imageIndex":0},{"imageOffset":146068,"symbol":"std::__1::__tree_const_iterator<std::__1::__value_type<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> >, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > >, std::__1::__tree_node<std::__1::__value_type<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> >, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > >, void*>*, long>::operator--[abi:nqe210106]()","symbolLocation":32,"imageIndex":0},{"imageOffset":145540,"symbol":"std::__1::__tree<std::__1::__value_type<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> >, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > >, std::__1::__map_value_compare<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> >, std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > const, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > >, std::__1::less<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > >, true>, std::__1::allocator<std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > const, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > > > >::__find_leaf(std::__1::__tree_const_iterator<std::__1::__value_type<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> >, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > >, std::__1::__tree_node<std::__1::__value_type<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> >, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > >, void*>*, long>, std::__1::__tree_end_node<std::__1::__tree_node_base<void*>*>*&, std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > const, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > > const&)","symbolLocation":256,"imageIndex":0},{"imageOffset":143384,"symbol":"std::__1::__tree_iterator<std::__1::__value_type<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> >, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > >, std::__1::__tree_node<std::__1::__value_type<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> >, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > >, void*>*, long> std::__1::__tree<std::__1::__value_type<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> >, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > >, std::__1::__map_value_compare<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> >, std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > const, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > >, std::__1::less<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > >, true>, std::__1::allocator<std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > const, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > > > >::__emplace_hint_multi<std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > const, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > > const&>(std::__1::__tree_const_iterator<std::__1::__value_type<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> >, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > >, std::__1::__tree_node<std::__1::__value_type<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> >, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > >, void*>*, long>, std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > const, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > > const&)","symbolLocation":88,"imageIndex":0},{"imageOffset":142520,"symbol":"void std::__1::__tree<std::__1::__value_type<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> >, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > >, std::__1::__map_value_compare<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> >, std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > const, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > >, std::__1::less<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > >, true>, std::__1::allocator<std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > const, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > > > >::__assign_multi<std::__1::__tree_const_iterator<std::__1::__value_type<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> >, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > >, std::__1::__tree_node<std::__1::__value_type<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> >, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > >, void*>*, long> >(std::__1::__tree_const_iterator<std::__1::__value_type<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> >, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > >, std::__1::__tree_node<std::__1::__value_type<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> >, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > >, void*>*, long>, std::__1::__tree_const_iterator<std::__1::__value_type<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> >, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > >, std::__1::__tree_node<std::__1::__value_type<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> >, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > >, void*>*, long>)","symbolLocation":360,"imageIndex":0},{"imageOffset":142072,"symbol":"std::__1::__tree<std::__1::__value_type<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> >, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > >, std::__1::__map_value_compare<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> >, std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > const, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > >, std::__1::less<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > >, true>, std::__1::allocator<std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > const, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > > > >::operator=(std::__1::__tree<std::__1::__value_type<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> >, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > >, std::__1::__map_value_compare<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> >, std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > const, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > >, std::__1::less<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > >, true>, std::__1::allocator<std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > const, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > > > > const&)","symbolLocation":116,"imageIndex":0},{"imageOffset":22896,"symbol":"std::__1::map<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> >, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> >, std::__1::less<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > >, std::__1::allocator<std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > const, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > > > >::operator=[abi:nqe210106](std::__1::map<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> >, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> >, std::__1::less<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > >, std::__1::allocator<std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > const, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > > > > const&)","symbolLocation":36,"imageIndex":0},{"imageOffset":22792,"symbol":"invocation function for block in loadConfig()","symbolLocation":52,"imageIndex":0},{"imageOffset":18032,"symbol":"_dispatch_client_callout","symbolLocation":20,"imageIndex":1},{"imageOffset":80068,"symbol":"_dispatch_lane_barrier_sync_invoke_and_complete","symbolLocation":56,"imageIndex":1},{"imageOffset":21008,"symbol":"loadConfig()","symbolLocation":3096,"imageIndex":0},{"imageOffset":16856,"symbol":"init()","symbolLocation":252,"imageIndex":0},{"imageOffset":51092,"symbol":"invocation function for block in dyld4::Loader::findAndRunAllInitializers(dyld4::RuntimeState&) const","symbolLocation":164,"imageIndex":2},{"imageOffset":264004,"symbol":"invocation function for block in dyld3::MachOAnalyzer::forEachInitializer(Diagnostics&, dyld3::MachOAnalyzer::VMAddrConverter const&, void (unsigned int) block_pointer, void const*) const","symbolLocation":340,"imageIndex":2},{"imageOffset":42024,"symbol":"invocation function for block in dyld3::MachOFile::forEachSection(void (dyld3::MachOFile::SectionInfo const&, bool, bool&) block_pointer) const","symbolLocation":532,"imageIndex":2},{"imageOffset":38520,"symbol":"dyld3::MachOFile::forEachLoadCommand(Diagnostics&, void (load_command const*, bool&) block_pointer) const","symbolLocation":168,"imageIndex":2},{"imageOffset":35280,"symbol":"dyld3::MachOFile::forEachSection(void (dyld3::MachOFile::SectionInfo const&, bool, bool&) block_pointer) const","symbolLocation":192,"imageIndex":2},{"imageOffset":89620,"symbol":"dyld3::MachOAnalyzer::forEachInitializer(Diagnostics&, dyld3::MachOAnalyzer::VMAddrConverter const&, void (unsigned int) block_pointer, void const*) const","symbolLocation":516,"imageIndex":2},{"imageOffset":76136,"symbol":"dyld4::Loader::findAndRunAllInitializers(dyld4::RuntimeState&) const","symbolLocation":172,"imageIndex":2},{"imageOffset":58180,"symbol":"dyld4::Loader::runInitializersBottomUp(dyld4::RuntimeState&, dyld3::Array<dyld4::Loader const*>&) const","symbolLocation":208,"imageIndex":2},{"imageOffset":58144,"symbol":"dyld4::Loader::runInitializersBottomUp(dyld4::RuntimeState&, dyld3::Array<dyld4::Loader const*>&) const","symbolLocation":172,"imageIndex":2},{"imageOffset":58144,"symbol":"dyld4::Loader::runInitializersBottomUp(dyld4::RuntimeState&, dyld3::Array<dyld4::Loader const*>&) const","symbolLocation":172,"imageIndex":2},{"imageOffset":83120,"symbol":"dyld4::Loader::runInitializersBottomUpPlusUpwardLinks(dyld4::RuntimeState&) const","symbolLocation":124,"imageIndex":2},{"imageOffset":213284,"symbol":"dyld4::APIs::runAllInitializersForMain()","symbolLocation":320,"imageIndex":2},{"imageOffset":128264,"symbol":"dyld4::prepare(dyld4::APIs&, dyld3::MachOAnalyzer const*)","symbolLocation":3024,"imageIndex":2},{"imageOffset":121476,"symbol":"start","symbolLocation":488,"imageIndex":2}]}],
+  "usedImages" : [
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4332371968,
+    "size" : 262144,
+    "uuid" : "fa23c807-c381-3550-acc3-a8d481b19706",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2404ABB1-988F-4357-B2CE-98EC072B9F6A\/Runner.app\/Frameworks\/iboxhook.dylib",
+    "name" : "iboxhook.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 6453538816,
+    "size" : 290816,
+    "uuid" : "bd02a625-8475-3fd6-8dc3-8aed25d1573b",
+    "path" : "\/usr\/lib\/system\/libdispatch.dylib",
+    "name" : "libdispatch.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 4329832448,
+    "size" : 409600,
+    "uuid" : "444f5041-332e-302e-3500-f4f6de52610d",
+    "path" : "\/private\/preboot\/FC24598BB760ADB7B0C2BEFA1A7CDD699AE38BA07A1233E4A6AE91D84AA9F64452F266426310852383C094D787D03573\/dopamine-cz5RKc\/procursus\/basebin\/gen\/dyld",
+    "name" : "dyld"
+  }
+],
+  "sharedCache" : {
+  "base" : 6453215232,
+  "size" : 2505736192,
+  "uuid" : "7dbee00b-9373-379a-b92d-1aadb1ea6866"
+},
+  "vmSummary" : "ReadOnly portion of Libraries: Total=842.8M resident=0K(0%) swapped_out_or_unallocated=842.8M(100%)\nWritable regions: Total=533.5M written=0K(0%) resident=0K(0%) swapped_out=0K(0%) unallocated=533.5M(100%)\n\n                                VIRTUAL   REGION \nREGION TYPE                        SIZE    COUNT (non-coalesced) \n===========                     =======  ======= \nActivity Tracing                   256K        1 \nKernel Alloc Once                   32K        1 \nMALLOC                           530.6M       18 \nMALLOC guard page                   64K        4 \nSTACK GUARD                         16K        1 \nStack                             1008K        1 \n__AUTH                            4621K      474 \n__AUTH_CONST                      24.8M      627 \n__DATA                            18.7M      619 \n__DATA_CONST                      28.6M      638 \n__DATA_DIRTY                      2690K      523 \n__FONT_DATA                          4K        1 \n__LINKEDIT                       189.7M        8 \n__OBJC_CONST                      6443K      438 \n__OBJC_RO                         91.2M        1 \n__OBJC_RW                         3488K        1 \n__TEXT                           653.1M      650 \n__UNICODE                          588K        1 \ndyld private memory               1024K        1 \nmapped file                         96K        2 \nshared memory                       32K        2 \n===========                     =======  ======= \nTOTAL                              1.5G     4012 \n",
+  "legacyInfo" : {
+  "threadTriggered" : {
+    "queue" : "ibox.hook.cfg"
+  }
+},
+  "trialInfo" : {
+  "rollouts" : [
+    {
+      "rolloutId" : "601d9415f79519000ccd4b69",
+      "factorPackIds" : {
+        "SIRI_TEXT_TO_SPEECH" : "622657ce37186c771d5404ad"
+      },
+      "deploymentId" : 240000416
+    },
+    {
+      "rolloutId" : "60186475825c62000ccf5450",
+      "factorPackIds" : {
+
+      },
+      "deploymentId" : 240000083
+    },
+    {
+      "rolloutId" : "5fc94383418129005b4e9ae0",
+      "factorPackIds" : {
+        "SIRI_UNDERSTANDING_ASR_HAMMER" : "63f991eb7a214850f5842aba"
+      },
+      "deploymentId" : 240000614
+    },
+    {
+      "rolloutId" : "60f8ddccefea4203d95cbeef",
+      "factorPackIds" : {
+
+      },
+      "deploymentId" : 240000025
+    },
+    {
+      "rolloutId" : "5f72dc58705eff005a46b3a9",
+      "factorPackIds" : {
+
+      },
+      "deploymentId" : 240000015
+    },
+    {
+      "rolloutId" : "5fb4245a1bbfe8005e33a1e1",
+      "factorPackIds" : {
+
+      },
+      "deploymentId" : 240000021
+    },
+    {
+      "rolloutId" : "63582c5f8a53461413999550",
+      "factorPackIds" : {
+
+      },
+      "deploymentId" : 240000002
+    },
+    {
+      "rolloutId" : "602c34a3046661000c9ebdde",
+      "factorPackIds" : {
+        "SIRI_UNDERSTANDING_NL_OVERRIDES" : "60cd4cc72b4f820aa5be5799"
+      },
+      "deploymentId" : 240000705
+    },
+    {
+      "rolloutId" : "60509d56f2766876dee21c11",
+      "factorPackIds" : {
+        "SIRI_UNDERSTANDING_MORPHUN" : "610072c2f6774779a7ced014"
+      },
+      "deploymentId" : 240000605
+    },
+    {
+      "rolloutId" : "602ad4dac86151000cf27e46",
+      "factorPackIds" : {
+        "SIRI_DICTATION_ASSETS" : "61fb0e59c773c43cde3bb80d"
+      },
+      "deploymentId" : 240000305
+    },
+    {
+      "rolloutId" : "60da5e84ab0ca017dace9abf",
+      "factorPackIds" : {
+
+      },
+      "deploymentId" : 240000008
+    },
+    {
+      "rolloutId" : "607844aa04477260f58a8077",
+      "factorPackIds" : {
+        "SIRI_MORPHUN_ASSETS" : "6103050cbfe6dc472e1c982a"
+      },
+      "deploymentId" : 240000066
+    },
+    {
+      "rolloutId" : "5ffde50ce2aacd000d47a95f",
+      "factorPackIds" : {
+
+      },
+      "deploymentId" : 240000553
+    }
+  ],
+  "experiments" : [
+
+  ]
+}
+}
