@@ -43,7 +43,7 @@ jobs:
             -std=c++17 -fobjc-arc \
             -dynamiclib \
             -I"$GITHUB_WORKSPACE" \
-            -framework Foundation -framework UIKit \
+            -framework Foundation -framework UIKit -framework CoreGraphics \
             -Wl,-no_warn_duplicate_libraries \
             -install_name "@rpath/iboxhook.dylib" \
             hook.mm "$GITHUB_WORKSPACE/libdobby.a" \
