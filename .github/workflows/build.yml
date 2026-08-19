@@ -1,0 +1,84 @@
+name: Build iboxhook.dylib
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ---------------------------------------------------------------
+      # 1. 编译 Dobby (iOS arm64 静态库), 用于 sideload 无越狱环境的 inline hook
+      # ---------------------------------------------------------------
+      - name: Build Dobby (iOS arm64 static)
+        run: |
+          git clone --depth 1 https://github.com/jmpews/Dobby.git dobby-src
+          cd dobby-src
+          mkdir build && cd build
+          cmake .. \
+            -G Xcode \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
+            -DDOBBY_GENERATE_SHARED=OFF \
+            -DDOBBY_DEBUG=OFF \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO
+          cmake --build . --config Release
+          # 找到产出的 libdobby.a
+          find . -name "libdobby.a" -exec cp {} "$GITHUB_WORKSPACE/libdobby.a" \;
+          cp -r ../include "$GITHUB_WORKSPACE/dobby-include" 2>/dev/null || true
+          # Dobby 头文件位置兜底
+          find .. -name "dobby.h" -exec cp {} "$GITHUB_WORKSPACE/dobby.h" \; 2>/dev/null || true
+          ls -la "$GITHUB_WORKSPACE/libdobby.a"
+
+      - name: Locate dobby.h
+        run: |
+          if [ ! -f "$GITHUB_WORKSPACE/dobby.h" ]; then
+            find "$GITHUB_WORKSPACE/dobby-src" -name "dobby.h" | head -1 | xargs -I{} cp {} "$GITHUB_WORKSPACE/dobby.h"
+          fi
+          head -5 "$GITHUB_WORKSPACE/dobby.h" || (echo "dobby.h 没找到!" && exit 1)
+
+      # ---------------------------------------------------------------
+      # 2. 编译 hook.mm -> iboxhook.dylib (静态链接 Dobby, 裸 dylib 无 substrate)
+      # ---------------------------------------------------------------
+      - name: Compile hook.mm -> dylib
+        run: |
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          clang++ -arch arm64 \
+            -isysroot "$SDK" \
+            -miphoneos-version-min=14.0 \
+            -std=c++17 -fobjc-arc \
+            -dynamiclib \
+            -I"$GITHUB_WORKSPACE" \
+            -framework Foundation -framework UIKit \
+            -Wl,-no_warn_duplicate_libraries \
+            -install_name "@rpath/iboxhook.dylib" \
+            hook.mm "$GITHUB_WORKSPACE/libdobby.a" \
+            -o iboxhook.dylib
+          echo "=== 编译完成 ==="
+          file iboxhook.dylib
+          otool -L iboxhook.dylib
+          otool -l iboxhook.dylib | grep -A2 LC_ID_DYLIB
+
+      # ---------------------------------------------------------------
+      # 3. ldid 伪签名 (sideload 前重签工具会重新签, 这里先自签保证结构完整)
+      # ---------------------------------------------------------------
+      - name: Fake-sign with ldid
+        run: |
+          brew install ldid || true
+          ldid -S iboxhook.dylib || true
+          echo "=== 最终产物 ==="
+          ls -la iboxhook.dylib
+          file iboxhook.dylib
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: iboxhook-dylib
+          path: iboxhook.dylib
+          if-no-files-found: error

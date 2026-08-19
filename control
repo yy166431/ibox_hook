@@ -1,0 +1,9 @@
+Package: com.seagull.iboxhook
+Name: iboxhook
+Version: 1.0.0
+Architecture: iphoneos-arm64
+Description: 爱盒(ibox.art) 显示文本/数字修改器 - 用于截图录屏。Hook Flutter渲染层ParagraphBuilder::addText,按配置规则替换屏幕上的文字。配置文件: ~/Documents/ibox_hook_rules.json (首次自动生成模板,支持热更新)。作者: 海鸥
+Maintainer: yy166431
+Author: yy166431
+Section: Tweaks
+Depends: mobilesubstrate

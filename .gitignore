@@ -1,0 +1,11 @@
+*.o
+*.dylib
+*.deb
+*.a
+.theos
+obj/
+dobby-src/
+dobby-include/
+libdobby.a
+dobby.h
+.DS_Store
