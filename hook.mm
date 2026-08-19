@@ -473,16 +473,33 @@ static void init() {
     int r = DobbyInstrument(target, onAddText);
     LOG(@"Hook @ 0x%lx (RVA 0x%lx) 结果=%d", (uintptr_t)target, RVA_ADDTEXT_BLR, r);
 
-    // 监听音量键, 弹编辑面板
-    [[NSNotificationCenter defaultCenter] addObserverForName:@"AVSystemController_SystemVolumeDidChangeNotification"
+    // 监听摇一摇, 弹编辑面板 (音量键私有API自签可能不生效, 改用摇一摇)
+    [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidBecomeActiveNotification
                                                       object:nil
                                                        queue:[NSOperationQueue mainQueue]
                                                   usingBlock:^(NSNotification *note) {
-        NSString *reason = note.userInfo[@"AVSystemController_AudioVolumeChangeReasonNotificationParameter"];
-        // ExplicitVolumeChange = 用户按了音量键 (非app代码调整)
-        if ([reason isEqualToString:@"ExplicitVolumeChange"]) {
-            [RuleEditorPanel toggle];
+        UIWindow *keyWin = [UIApplication sharedApplication].keyWindow;
+        if (!keyWin) keyWin = [UIApplication sharedApplication].windows.firstObject;
+        if (keyWin && ![keyWin.rootViewController isKindOfClass:[RuleEditorPanel class]]) {
+            // 给主窗口加摇一摇响应
+            [keyWin becomeFirstResponder];
         }
     }];
-    LOG(@"音量键面板已就绪, 按音量+/-打开编辑器");
+
+    // 全局监听摇一摇手势 (method swizzle UIWindow.motionEnded)
+    Class winCls = [UIWindow class];
+    SEL motionSel = @selector(motionEnded:withEvent:);
+    Method origM = class_getInstanceMethod(winCls, motionSel);
+    if (origM) {
+        IMP origIMP = method_getImplementation(origM);
+        IMP newIMP = imp_implementationWithBlock(^(UIWindow *self, UIEventSubtype motion, UIEvent *event) {
+            ((void(*)(id,SEL,UIEventSubtype,UIEvent*))origIMP)(self, motionSel, motion, event);
+            if (motion == UIEventSubtypeMotionShake) {
+                [RuleEditorPanel toggle];
+            }
+        });
+        method_setImplementation(origM, newIMP);
+    }
+
+    LOG(@"摇一摇面板已就绪, 摇晃设备打开编辑器");
 }
