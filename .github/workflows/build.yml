@@ -13,35 +13,23 @@ jobs:
         uses: actions/checkout@v4
 
       # ---------------------------------------------------------------
-      # 1. 编译 Dobby (iOS arm64 静态库), 用于 sideload 无越狱环境的 inline hook
+      # 1. 直接下 Dobby 官方预编译 iOS arm64 静态库 (免 CMake 交叉编译)
+      #    jmpews/Dobby releases/latest -> dobby-iphoneos-all.tar.gz
+      #    里面有 build/iphoneos/arm64/libdobby.a + build/iphoneos/dobby.h
       # ---------------------------------------------------------------
-      - name: Build Dobby (iOS arm64 static)
+      - name: Fetch prebuilt Dobby (iOS arm64 static)
         run: |
-          git clone --depth 1 https://github.com/jmpews/Dobby.git dobby-src
-          cd dobby-src
-          mkdir build && cd build
-          cmake .. \
-            -G Xcode \
-            -DCMAKE_SYSTEM_NAME=iOS \
-            -DCMAKE_OSX_ARCHITECTURES=arm64 \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
-            -DDOBBY_GENERATE_SHARED=OFF \
-            -DDOBBY_DEBUG=OFF \
-            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO
-          cmake --build . --config Release
-          # 找到产出的 libdobby.a
-          find . -name "libdobby.a" -exec cp {} "$GITHUB_WORKSPACE/libdobby.a" \;
-          cp -r ../include "$GITHUB_WORKSPACE/dobby-include" 2>/dev/null || true
-          # Dobby 头文件位置兜底
-          find .. -name "dobby.h" -exec cp {} "$GITHUB_WORKSPACE/dobby.h" \; 2>/dev/null || true
+          curl -sL "https://github.com/jmpews/Dobby/releases/download/latest/dobby-iphoneos-all.tar.gz" -o dobby-ios.tar.gz
+          mkdir -p dobby-ios
+          tar -xzf dobby-ios.tar.gz -C dobby-ios
+          cp dobby-ios/build/iphoneos/arm64/libdobby.a "$GITHUB_WORKSPACE/libdobby.a"
+          cp dobby-ios/build/iphoneos/dobby.h          "$GITHUB_WORKSPACE/dobby.h"
+          echo "=== libdobby.a ==="
           ls -la "$GITHUB_WORKSPACE/libdobby.a"
-
-      - name: Locate dobby.h
-        run: |
-          if [ ! -f "$GITHUB_WORKSPACE/dobby.h" ]; then
-            find "$GITHUB_WORKSPACE/dobby-src" -name "dobby.h" | head -1 | xargs -I{} cp {} "$GITHUB_WORKSPACE/dobby.h"
-          fi
-          head -5 "$GITHUB_WORKSPACE/dobby.h" || (echo "dobby.h 没找到!" && exit 1)
+          file "$GITHUB_WORKSPACE/libdobby.a"
+          lipo -info "$GITHUB_WORKSPACE/libdobby.a" || true
+          echo "=== dobby.h ==="
+          head -5 "$GITHUB_WORKSPACE/dobby.h"
 
       # ---------------------------------------------------------------
       # 2. 编译 hook.mm -> iboxhook.dylib (静态链接 Dobby, 裸 dylib 无 substrate)
