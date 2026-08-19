@@ -88,7 +88,7 @@ static time_t& g_cfg_mtime() {
     static time_t t = 0;
     return t;
 }
-static dispatch_queue_t& g_cfg_q() {
+static dispatch_queue_t g_cfg_q() {
     static dispatch_queue_t q = dispatch_queue_create("ibox.hook.cfg", DISPATCH_QUEUE_SERIAL);
     return q;
 }
@@ -96,6 +96,9 @@ static dispatch_queue_t& g_cfg_q() {
 static NSString* configPath() {
     return [NSHomeDirectory() stringByAppendingPathComponent:@"Documents/ibox_hook_rules.json"];
 }
+
+// 前向声明，RuleEditorPanel 需要
+static void loadConfig();
 
 // ---------------------------------------------------------------------------
 //  音量键触发的编辑面板 (取代 Files app 改 JSON 的破操作)
@@ -292,10 +295,6 @@ static NSString* configPath() {
 }
 
 @end
-
-static NSString* configPath() {
-    return [NSHomeDirectory() stringByAppendingPathComponent:@"Documents/ibox_hook_rules.json"];
-}
 
 // UTF-16 <-> UTF-8
 static std::string u16_to_u8(const std::u16string& s) {
