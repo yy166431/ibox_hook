@@ -17,6 +17,8 @@
 #import <UIKit/UIKit.h>
 #import <MediaPlayer/MediaPlayer.h>
 #import <AVFoundation/AVFoundation.h>
+#import <objc/runtime.h>
+#import <objc/message.h>
 #include <dlfcn.h>
 #include <mach-o/dyld.h>
 #include <string>
@@ -478,8 +480,12 @@ static void init() {
                                                       object:nil
                                                        queue:[NSOperationQueue mainQueue]
                                                   usingBlock:^(NSNotification *note) {
-        UIWindow *keyWin = [UIApplication sharedApplication].keyWindow;
-        if (!keyWin) keyWin = [UIApplication sharedApplication].windows.firstObject;
+        NSArray *windows = [UIApplication sharedApplication].windows;
+        UIWindow *keyWin = nil;
+        for (UIWindow *w in windows) {
+            if (w.isKeyWindow) { keyWin = w; break; }
+        }
+        if (!keyWin) keyWin = windows.firstObject;
         if (keyWin && ![keyWin.rootViewController isKindOfClass:[RuleEditorPanel class]]) {
             // 给主窗口加摇一摇响应
             [keyWin becomeFirstResponder];
