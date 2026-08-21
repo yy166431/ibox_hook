@@ -49,11 +49,18 @@ struct ExactRuleU16 {
     uint16_t fromLen;
     uint16_t toLen;
 };
+// v6 风格模式: 持有\s*\d+ / ¥\s*[\d,.]+  (热路径手写匹配, 不跑 regex)
 struct RuleSnap {
     ExactRuleU16 *exact;
     size_t exactCount;
     char16_t *wallet;
     uint16_t walletLen;
+    char16_t *holdNum;   // 替换 "持有" 后面的数字, 默认 9999
+    uint16_t holdNumLen;
+    char16_t *yenNum;    // 替换 "¥" 后面的数字, 默认 88888
+    uint16_t yenNumLen;
+    bool doHold;
+    bool doYen;
     bool enabled;
 };
 
@@ -92,7 +99,9 @@ static char16_t *u8_to_u16_heap(const char *u8, uint16_t *outLen) {
 }
 
 static void publishSnap(const std::map<std::string, std::string> &exact,
-                        const std::string &wallet, bool enabled) {
+                        const std::string &wallet, bool enabled,
+                        const std::string &holdNum, bool doHold,
+                        const std::string &yenNum, bool doYen) {
     std::vector<std::pair<std::string, std::string>> pairs(exact.begin(), exact.end());
     std::sort(pairs.begin(), pairs.end(), [](const auto &a, const auto &b) {
         return a.first.size() > b.first.size();
@@ -101,6 +110,8 @@ static void publishSnap(const std::map<std::string, std::string> &exact,
     RuleSnap *s = (RuleSnap *)calloc(1, sizeof(RuleSnap));
     if (!s) return;
     s->enabled = enabled;
+    s->doHold = doHold;
+    s->doYen = doYen;
     s->exactCount = pairs.size();
     if (s->exactCount) {
         s->exact = (ExactRuleU16 *)calloc(s->exactCount, sizeof(ExactRuleU16));
@@ -110,6 +121,14 @@ static void publishSnap(const std::map<std::string, std::string> &exact,
         }
     }
     if (!wallet.empty()) s->wallet = u8_to_u16_heap(wallet.c_str(), &s->walletLen);
+    if (doHold) {
+        std::string hn = holdNum.empty() ? "9999" : holdNum;
+        s->holdNum = u8_to_u16_heap(hn.c_str(), &s->holdNumLen);
+    }
+    if (doYen) {
+        std::string yn = yenNum.empty() ? "88888" : yenNum;
+        s->yenNum = u8_to_u16_heap(yn.c_str(), &s->yenNumLen);
+    }
 
     (void)g_snap.exchange(s, std::memory_order_acq_rel); // 旧快照不 free
 
@@ -175,6 +194,89 @@ static inline bool looksLikeWalletU16(const char16_t *s, size_t n) {
     return true;
 }
 
+static inline bool is_digit_u16(char16_t c) { return c >= u'0' && c <= u'9'; }
+static inline bool is_numchar_u16(char16_t c) {
+    return is_digit_u16(c) || c == u',' || c == u'.';
+}
+static inline bool is_space_u16(char16_t c) {
+    return c == u' ' || c == u'\t' || c == 0x00A0 || c == 0x3000;
+}
+
+// 持有\s*\d+  →  前缀 + holdNum + 后缀(按 v6 截一点避免撑爆布局)
+// ¥\s*[\d,.]+ →  前缀 + yenNum + 后缀
+static bool tryRewriteHoldYen(const char16_t *p, size_t n, RuleSnap *snap,
+                              char16_t *out, size_t outCap, size_t *outLen) {
+    // 找 "持有"
+    static const char16_t HOLD[] = { 0x6301, 0x6709 }; // 持有
+    static const char16_t YEN = 0x00A5;                 // ¥
+    // 也认全角 ￥ U+FFE5
+    static const char16_t YEN_FW = 0xFFE5;
+
+    if (snap->doHold && snap->holdNum && snap->holdNumLen) {
+        int hp = u16_find(p, n, HOLD, 2);
+        if (hp >= 0) {
+            size_t i = (size_t)hp + 2;
+            while (i < n && is_space_u16(p[i])) i++;
+            size_t numStart = i;
+            while (i < n && is_digit_u16(p[i])) i++;
+            if (i > numStart) {
+                // head = [0, numStart), rep = holdNum, tail = [i, n)
+                size_t head = numStart;
+                size_t tail = n - i;
+                // v6: tail 可能截短
+                size_t oldNumLen = i - numStart;
+                size_t newNumLen = snap->holdNumLen;
+                if (newNumLen > oldNumLen && tail > 0) {
+                    size_t cut = newNumLen - oldNumLen;
+                    if (cut > tail) cut = tail;
+                    tail -= cut;
+                }
+                size_t total = head + newNumLen + tail;
+                if (total > outCap) total = outCap;
+                size_t o = 0;
+                for (size_t k = 0; k < head && o < total; k++) out[o++] = p[k];
+                for (size_t k = 0; k < newNumLen && o < total; k++) out[o++] = snap->holdNum[k];
+                for (size_t k = 0; k < tail && o < total; k++) out[o++] = p[i + k];
+                *outLen = o;
+                return true;
+            }
+        }
+    }
+
+    if (snap->doYen && snap->yenNum && snap->yenNumLen) {
+        int yp = -1;
+        for (size_t i = 0; i < n; i++) {
+            if (p[i] == YEN || p[i] == YEN_FW) { yp = (int)i; break; }
+        }
+        if (yp >= 0) {
+            size_t i = (size_t)yp + 1;
+            while (i < n && is_space_u16(p[i])) i++;
+            size_t numStart = i;
+            while (i < n && is_numchar_u16(p[i])) i++;
+            if (i > numStart) {
+                size_t head = numStart;
+                size_t tail = n - i;
+                size_t oldNumLen = i - numStart;
+                size_t newNumLen = snap->yenNumLen;
+                if (newNumLen > oldNumLen && tail > 0) {
+                    size_t cut = newNumLen - oldNumLen;
+                    if (cut > tail) cut = tail;
+                    tail -= cut;
+                }
+                size_t total = head + newNumLen + tail;
+                if (total > outCap) total = outCap;
+                size_t o = 0;
+                for (size_t k = 0; k < head && o < total; k++) out[o++] = p[k];
+                for (size_t k = 0; k < newNumLen && o < total; k++) out[o++] = snap->yenNum[k];
+                for (size_t k = 0; k < tail && o < total; k++) out[o++] = p[i + k];
+                *outLen = o;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 // ★ 异常热路径: 禁止 ObjC / mutex / malloc / regex / LOG
 static void rewriteAddTextBuf(uint64_t x1) {
     if (!x1) return;
@@ -186,6 +288,7 @@ static void rewriteAddTextBuf(uint64_t x1) {
     size_t n = buf->length();
     if (!p || n == 0 || n > 4096) return;
 
+    // 1) exact 整串
     for (size_t i = 0; i < snap->exactCount; i++) {
         ExactRuleU16 *r = &snap->exact[i];
         if (!r->from || !r->to) continue;
@@ -195,9 +298,24 @@ static void rewriteAddTextBuf(uint64_t x1) {
             return;
         }
     }
+
+    // 2) 持有数字 / ¥ 价格 (v6)
+    {
+        char16_t tmp[512];
+        size_t ol = 0;
+        if (tryRewriteHoldYen(p, n, snap, tmp, 512, &ol)) {
+            if (buf->setInPlaceChars(tmp, ol))
+                __atomic_add_fetch(&g_hit_count, 1, __ATOMIC_RELAXED);
+            return;
+        }
+    }
+
+    // 3) 包含替换 (中文/任意子串, 长 key 优先)
     for (size_t i = 0; i < snap->exactCount; i++) {
         ExactRuleU16 *r = &snap->exact[i];
         if (!r->from || !r->to || !r->fromLen) continue;
+        // 跳过太短 key 防误伤 (单字符数字除外, 数字走 exact 整串)
+        if (r->fromLen == 1 && is_digit_u16(r->from[0])) continue;
         int pos = u16_find(p, n, r->from, r->fromLen);
         if (pos < 0) continue;
         char16_t tmp[512];
@@ -213,6 +331,8 @@ static void rewriteAddTextBuf(uint64_t x1) {
             __atomic_add_fetch(&g_hit_count, 1, __ATOMIC_RELAXED);
         return;
     }
+
+    // 4) 钱包保长
     if (snap->wallet && snap->walletLen && looksLikeWalletU16(p, n)) {
         char16_t tmp[128];
         size_t outN = n > 128 ? 128 : n;
@@ -231,27 +351,71 @@ static NSString *configPath() {
 }
 static void loadConfig();
 
-static void writeTemplateIfNeeded() {
-    NSString *path = configPath();
-    if ([[NSFileManager defaultManager] fileExistsAtPath:path]) return;
-    NSDictionary *tpl = @{
-        @"_说明": @"exact=精确/包含; wallet=0x保长; enabled。正则字段仅作备注,热路径用exact。",
+static NSDictionary *defaultConfigDict() {
+    return @{
+        @"_ver": @6,
+        @"_说明": @"exact=精确整串优先,否则包含; hold_num=持有后面的数字; yen_num=¥后面的数字; wallet=0x保长; enabled",
         @"enabled": @YES,
+        @"hold_num": @"9999",
+        @"yen_num": @"88888",
         @"exact": @{
-            @"289": @"999", @"2632": @"9999", @"552": @"999",
-            @"16868": @"99999", @"28391": @"88888", @"1560": @"3650",
-            @"红苹果": @"非常牛逼",
-            @"持有": @"持有9999" // 包含匹配兜底; 用户可改更精确
+            @"289": @"999",
+            @"2632": @"9999",
+            @"552": @"999",
+            @"16868": @"99999",
+            @"28391": @"88888",
+            @"1560": @"3650",
+            @"红苹果": @"非常牛逼"
         },
         @"wallet": @"0x8888888888888888888888888888888888888888"
     };
-    NSData *d = [NSJSONSerialization dataWithJSONObject:tpl
-                                                options:NSJSONWritingPrettyPrinted error:nil];
-    [d writeToFile:path atomically:YES];
-    LOG(@"配置模板: %@", path);
+}
+
+static void writeTemplateIfNeeded() {
+    NSString *path = configPath();
+    NSFileManager *fm = [NSFileManager defaultManager];
+    if (![fm fileExistsAtPath:path]) {
+        NSData *d = [NSJSONSerialization dataWithJSONObject:defaultConfigDict()
+                                                    options:NSJSONWritingPrettyPrinted error:nil];
+        [d writeToFile:path atomically:YES];
+        LOG(@"配置模板: %@", path);
+        return;
+    }
+    // 旧配置缺 _ver/hold_num: 合并默认 exact + 模式, 不覆盖用户已有 key
+    NSData *data = [NSData dataWithContentsOfFile:path];
+    NSMutableDictionary *json = nil;
+    if (data) {
+        id obj = [NSJSONSerialization JSONObjectWithData:data options:NSJSONReadingMutableContainers error:nil];
+        if ([obj isKindOfClass:[NSMutableDictionary class]]) json = obj;
+        else if ([obj isKindOfClass:[NSDictionary class]]) json = [obj mutableCopy];
+    }
+    if (!json) return;
+    NSNumber *ver = json[@"_ver"];
+    if ([ver isKindOfClass:[NSNumber class]] && ver.intValue >= 6) return;
+
+    NSDictionary *def = defaultConfigDict();
+    if (!json[@"hold_num"]) json[@"hold_num"] = def[@"hold_num"];
+    if (!json[@"yen_num"]) json[@"yen_num"] = def[@"yen_num"];
+    if (!json[@"wallet"]) json[@"wallet"] = def[@"wallet"];
+    NSMutableDictionary *exact = [json[@"exact"] isKindOfClass:[NSDictionary class]]
+        ? [json[@"exact"] mutableCopy] : [NSMutableDictionary dictionary];
+    // 删掉错误的 "持有"=>"持有9999" 整词规则
+    if ([exact[@"持有"] isEqualToString:@"持有9999"]) [exact removeObjectForKey:@"持有"];
+    NSDictionary *defEx = def[@"exact"];
+    for (NSString *k in defEx) {
+        if (!exact[k]) exact[k] = defEx[k];
+    }
+    json[@"exact"] = exact;
+    json[@"_ver"] = @6;
+    NSData *out = [NSJSONSerialization dataWithJSONObject:json
+                                                  options:NSJSONWritingPrettyPrinted error:nil];
+    [out writeToFile:path atomically:YES];
+    g_cfg_mtime = 0;
+    LOG(@"配置已升级到 v6");
 }
 
 static void loadConfig() {
+    ensureCxx();
     NSString *path = configPath();
     NSDictionary *attr = [[NSFileManager defaultManager] attributesOfItemAtPath:path error:nil];
     time_t mtime = attr ? (time_t)[[attr fileModificationDate] timeIntervalSince1970] : 0;
@@ -262,36 +426,70 @@ static void loadConfig() {
     if (![json isKindOfClass:[NSDictionary class]]) return;
 
     std::map<std::string, std::string> exact;
-    std::string wallet;
-    bool enabled = true;
+    std::string wallet, holdNum = "9999", yenNum = "88888";
+    bool enabled = true, doHold = true, doYen = true;
+
     id en = json[@"enabled"];
     if ([en isKindOfClass:[NSNumber class]]) enabled = [(NSNumber *)en boolValue];
+
     NSDictionary *ex = json[@"exact"];
     if ([ex isKindOfClass:[NSDictionary class]]) {
         for (NSString *k in ex) {
             id v = ex[k];
-            if ([k isKindOfClass:[NSString class]] && [v isKindOfClass:[NSString class]])
-                exact[[k UTF8String]] = [(NSString *)v UTF8String];
+            if (![k isKindOfClass:[NSString class]] || ![v isKindOfClass:[NSString class]]) continue;
+            // 跳过错误整词
+            if ([k isEqualToString:@"持有"] && [v isEqualToString:@"持有9999"]) continue;
+            exact[[k UTF8String]] = [(NSString *)v UTF8String];
         }
     }
-    // 无元字符的 regex 当 exact
+
+    // 无元字符 regex → exact; 识别持有/¥ 模式
     NSArray *rx = json[@"regex"];
     if ([rx isKindOfClass:[NSArray class]]) {
         NSCharacterSet *meta = [NSCharacterSet characterSetWithCharactersInString:@"\\.*+?[](){}^$|"];
         for (NSDictionary *r in rx) {
             NSString *p = r[@"pattern"], *rep = r[@"replace"];
             if (![p isKindOfClass:[NSString class]] || ![rep isKindOfClass:[NSString class]]) continue;
+            if ([p containsString:@"持有"] && [p containsString:@"d"]) {
+                // 持有\\d+ → 从 replace 抠数字
+                NSRegularExpression *re = [NSRegularExpression regularExpressionWithPattern:@"\\d+" options:0 error:nil];
+                NSTextCheckingResult *m = [re firstMatchInString:rep options:0 range:NSMakeRange(0, rep.length)];
+                if (m) holdNum = [[rep substringWithRange:m.range] UTF8String];
+                doHold = YES;
+                continue;
+            }
+            if ([p containsString:@"¥"] || [p containsString:@"￥"]) {
+                NSRegularExpression *re = [NSRegularExpression regularExpressionWithPattern:@"\\d+" options:0 error:nil];
+                NSTextCheckingResult *m = [re firstMatchInString:rep options:0 range:NSMakeRange(0, rep.length)];
+                if (m) yenNum = [[rep substringWithRange:m.range] UTF8String];
+                doYen = YES;
+                continue;
+            }
             if ([p rangeOfCharacterFromSet:meta].location == NSNotFound)
                 exact[[p UTF8String]] = [rep UTF8String];
         }
     }
+
+    NSString *hn = json[@"hold_num"];
+    if ([hn isKindOfClass:[NSString class]] && hn.length) holdNum = [hn UTF8String];
+    id dh = json[@"hold_enable"];
+    if ([dh isKindOfClass:[NSNumber class]]) doHold = [dh boolValue];
+
+    NSString *yn = json[@"yen_num"];
+    if ([yn isKindOfClass:[NSString class]] && yn.length) yenNum = [yn UTF8String];
+    id dy = json[@"yen_enable"];
+    if ([dy isKindOfClass:[NSNumber class]]) doYen = [dy boolValue];
+
     NSString *w = json[@"wallet"];
     if ([w isKindOfClass:[NSString class]]) wallet = [w UTF8String];
 
     g_cfg_mtime = mtime;
-    publishSnap(exact, wallet, enabled);
-    LOG(@"配置: exact%lu wallet%s en%d",
-        (unsigned long)exact.size(), wallet.empty() ? "无" : "有", (int)enabled);
+    publishSnap(exact, wallet, enabled, holdNum, doHold, yenNum, doYen);
+    LOG(@"配置: exact%lu hold=%s yen=%s wallet%s en%d",
+        (unsigned long)exact.size(),
+        doHold ? holdNum.c_str() : "off",
+        doYen ? yenNum.c_str() : "off",
+        wallet.empty() ? "无" : "有", (int)enabled);
 }
 
 // ============================ UI ============================
@@ -304,6 +502,8 @@ static void loadConfig() {
 @property (nonatomic, strong) UIScrollView *scroll;
 @property (nonatomic, strong) UISwitch *enableSwitch;
 @property (nonatomic, strong) UITextView *walletField;
+@property (nonatomic, strong) UITextView *holdField;
+@property (nonatomic, strong) UITextView *yenField;
 @property (nonatomic, strong) UITextView *exactField;
 @property (nonatomic, strong) UILabel *statusLabel;
 @end
@@ -358,10 +558,20 @@ static void loadConfig() {
     wl.font = [UIFont systemFontOfSize:13]; [self.scroll addSubview:wl]; y += 24;
     self.walletField = [self tv:CGRectMake(pad, y, innerW, 44)]; y += 56;
 
+    UILabel *hl = [[UILabel alloc] initWithFrame:CGRectMake(pad, y, innerW, 20)];
+    hl.text = @"「持有」后面的数字 (空=关闭)"; hl.textColor = [UIColor colorWithWhite:0.7 alpha:1];
+    hl.font = [UIFont systemFontOfSize:13]; [self.scroll addSubview:hl]; y += 24;
+    self.holdField = [self tv:CGRectMake(pad, y, innerW, 40)]; y += 52;
+
+    UILabel *yl = [[UILabel alloc] initWithFrame:CGRectMake(pad, y, innerW, 20)];
+    yl.text = @"「¥/￥」后面的数字 (空=关闭)"; yl.textColor = [UIColor colorWithWhite:0.7 alpha:1];
+    yl.font = [UIFont systemFontOfSize:13]; [self.scroll addSubview:yl]; y += 24;
+    self.yenField = [self tv:CGRectMake(pad, y, innerW, 40)]; y += 52;
+
     UILabel *el = [[UILabel alloc] initWithFrame:CGRectMake(pad, y, innerW, 20)];
-    el.text = @"精确/包含 (原文=>新文 每行一条)"; el.textColor = [UIColor colorWithWhite:0.7 alpha:1];
+    el.text = @"精确/包含 (原文=>新文 每行一条, 支持中文)"; el.textColor = [UIColor colorWithWhite:0.7 alpha:1];
     el.font = [UIFont systemFontOfSize:13]; [self.scroll addSubview:el]; y += 24;
-    self.exactField = [self tv:CGRectMake(pad, y, innerW, 220)]; y += 240;
+    self.exactField = [self tv:CGRectMake(pad, y, innerW, 180)]; y += 200;
 
     self.scroll.contentSize = CGSizeMake(W, y + 20);
 
@@ -401,28 +611,39 @@ static void loadConfig() {
     NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
     if (![json isKindOfClass:[NSDictionary class]]) return;
     self.walletField.text = json[@"wallet"] ?: @"";
+    self.holdField.text = json[@"hold_num"] ?: @"9999";
+    self.yenField.text = json[@"yen_num"] ?: @"88888";
     id en = json[@"enabled"];
     if ([en isKindOfClass:[NSNumber class]]) self.enableSwitch.on = [en boolValue];
     NSMutableArray *lines = [NSMutableArray array];
     NSDictionary *exact = json[@"exact"];
     if ([exact isKindOfClass:[NSDictionary class]]) {
-        for (NSString *k in [[exact allKeys] sortedArrayUsingSelector:@selector(compare:)])
+        for (NSString *k in [[exact allKeys] sortedArrayUsingSelector:@selector(compare:)]) {
+            if ([k isEqualToString:@"持有"]) continue; // 旧错误规则
             [lines addObject:[NSString stringWithFormat:@"%@=>%@", k, exact[k]]];
+        }
     }
     self.exactField.text = [lines componentsJoinedByString:@"\n"];
 }
 - (void)saveAndClose {
     NSMutableDictionary *json = [NSMutableDictionary dictionary];
+    json[@"_ver"] = @6;
     json[@"enabled"] = @(self.enableSwitch.on);
     NSString *wallet = [self.walletField.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
     if (wallet.length) json[@"wallet"] = wallet;
+    NSString *hold = [self.holdField.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (hold.length) { json[@"hold_num"] = hold; json[@"hold_enable"] = @YES; }
+    else { json[@"hold_enable"] = @NO; json[@"hold_num"] = @""; }
+    NSString *yen = [self.yenField.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (yen.length) { json[@"yen_num"] = yen; json[@"yen_enable"] = @YES; }
+    else { json[@"yen_enable"] = @NO; json[@"yen_num"] = @""; }
     NSMutableDictionary *exact = [NSMutableDictionary dictionary];
     for (NSString *line in [self.exactField.text componentsSeparatedByString:@"\n"]) {
         NSRange sep = [line rangeOfString:@"=>"];
         if (sep.location == NSNotFound) continue;
         NSString *k = [[line substringToIndex:sep.location] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
         NSString *v = [[line substringFromIndex:sep.location + 2] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
-        if (k.length) exact[k] = v ?: @"";
+        if (k.length && ![k isEqualToString:@"持有"]) exact[k] = v ?: @"";
     }
     if (exact.count) json[@"exact"] = exact;
     [[NSJSONSerialization dataWithJSONObject:json options:NSJSONWritingPrettyPrinted error:nil]
