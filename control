@@ -1,8 +1,8 @@
 Package: com.seagull.iboxhook
 Name: iboxhook
-Version: 3.0.0
+Version: 4.0.0
 Architecture: iphoneos-arm64
-Description: 爱盒(com.aihe.abc) 文本修改器 v3 - 静态BRK+异常处理, iOS26轻松签可用。需同时替换 patched Flutter@0x481ca8。作者: 海鸥
+Description: 爱盒(com.aihe.abc) 文本修改器 v4 - 硬件断点单dylib, iOS26轻松签只注入一个文件。作者: 海鸥
 Maintainer: yy166431
 Author: 海鸥
 Section: Tweaks

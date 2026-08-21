@@ -12,9 +12,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # v3: 不再链 Dobby。iOS26 轻松签下 runtime 改 __TEXT 会被 CODESIGNING 秒杀。
-      # hook 改为静态 BRK + EXC_BREAKPOINT 异常处理。
-      - name: Compile hook.mm -> dylib (no dobby)
+      - name: Compile hook.mm -> dylib (HWBP, no dobby)
         run: |
           set -e
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
@@ -32,18 +30,8 @@ jobs:
             -o iboxhook.dylib
           file iboxhook.dylib
           otool -L iboxhook.dylib
-          otool -l iboxhook.dylib | grep -A2 LC_ID_DYLIB || true
           ls -la iboxhook.dylib
-          # 确认没链奇怪的 substrate
           ! otool -L iboxhook.dylib | grep -i substrate
-
-      - name: Patch Flutter binary (BRK)
-        run: |
-          set -e
-          # 仓库不一定带原始 Flutter; 有 tools 脚本即可。artifact 只出 dylib。
-          # 用户本地用 tools/patch_flutter.py 打自己 IPA 里的 Flutter。
-          python3 tools/patch_flutter.py --help
-          ls -la tools/
 
       - name: Fake-sign with ldid
         run: |
@@ -56,7 +44,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: iboxhook-dylib
-          path: |
-            iboxhook.dylib
-            tools/patch_flutter.py
+          path: iboxhook.dylib
           if-no-files-found: error

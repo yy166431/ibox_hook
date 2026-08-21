@@ -17,8 +17,8 @@
 //
 //  iOS 26 注意:
 //    轻松签 + 运行时 Dobby/inline hook 会改 __TEXT 页权限 → CODESIGNING/Invalid Page 秒杀。
-//    正确姿势: 离线把 Flutter@0x481ca8 的 BLR X8 打成 BRK #0xCA8,
-//    dylib 只挂 EXC_BREAKPOINT 异常处理, 改寄存器模拟 BLR, 绝不写代码页。
+//    v4: 硬件断点 (ARM_DEBUG_STATE64 BVR/BCR) + EXC_BREAKPOINT。
+//        不改代码页、不 patch Flutter，用户只注入一个 dylib。
 //
 //  作者: 海鸥
 // ============================================================================
@@ -50,11 +50,11 @@ static inline void LOG(NSString *fmt, ...) {
 }
 
 // Flutter.framework 内 ParagraphBuilder::addText 的 blr 点, 版本锁定
-// 离线 patch: BLR X8 (D63F0100) -> BRK #0xCA8 (D4219500)
 static const uintptr_t RVA_ADDTEXT_BLR = 0x481ca8;
 static const uint32_t  INSN_BLR_X8     = 0xD63F0100;
-static const uint32_t  INSN_BRK_CA8    = 0xD4219500; // BRK #0xCA8
-static const uint16_t  BRK_IMM         = 0x0CA8;
+// DBGBCR: E=1, PMC=EL0|EL1(0b11), BAS=0b1111 → 0x1e5
+static const uint64_t  HWBP_BCR_ENABLE = 0x1e5ULL;
+static const int       HWBP_SLOT       = 0;
 
 // ---------------------------------------------------------------------------
 //  UTF-16 SSO 缓冲 (0x18 字节, 栈上)
@@ -834,7 +834,7 @@ static void installFloatingBall() {
 @end
 
 // ---------------------------------------------------------------------------
-//  找 Flutter base + 校验静态 BRK patch
+//  找 Flutter base + 硬件断点目标
 // ---------------------------------------------------------------------------
 static uintptr_t findFlutterBase() {
     uint32_t n = _dyld_image_count();
@@ -858,45 +858,99 @@ static uintptr_t findFlutterBase() {
     return 0;
 }
 
-static uintptr_t g_brk_addr = 0;
+static uintptr_t g_hook_addr = 0; // Flutter base + RVA, 原指令仍是 BLR X8
 static _Atomic bool g_exc_ready = false;
+static _Atomic bool g_hwbp_ok = false;
 
-static bool ensureBrkTarget() {
-    if (g_brk_addr) return true;
+// 有的 SDK 不暴露 arm_debug_state64_t, 自己铺一份布局
+#ifndef ARM_DEBUG_STATE64
+#define ARM_DEBUG_STATE64 15
+#endif
+typedef struct {
+    uint64_t __bvr[16];
+    uint64_t __bcr[16];
+    uint64_t __wvr[16];
+    uint64_t __wcr[16];
+    uint64_t __mdscr_el1;
+} ibox_arm_debug_state64_t;
+#define ARM_DEBUG_STATE64_COUNT ((mach_msg_type_number_t)(sizeof(ibox_arm_debug_state64_t) / sizeof(uint32_t)))
+
+static bool ensureHookTarget() {
+    if (g_hook_addr) return true;
     uintptr_t base = findFlutterBase();
     if (!base) return false;
 
     uintptr_t addr = base + RVA_ADDTEXT_BLR;
-    uint32_t insn = 0;
-    // 只读探测, 不改权限
-    insn = *(volatile uint32_t *)addr;
+    uint32_t insn = *(volatile uint32_t *)addr;
 
-    if (insn == INSN_BRK_CA8) {
-        g_brk_addr = addr;
-        LOG(@"Flutter BRK 已就位 @ %p (base=%p)", (void *)addr, (void *)base);
-        return true;
-    }
     if (insn == INSN_BLR_X8) {
-        LOG(@"致命: Flutter@%p 仍是 BLR X8, 没打静态 patch! 请替换 Flutter.framework 为 patched 版",
-            (void *)addr);
-        return false;
-    }
-    LOG(@"警告: Flutter@%p 指令=%08x, 既不是 BRK 也不是 BLR, 版本可能变了",
-        (void *)addr, insn);
-    // 仍然挂上, 万一用户用了别的 imm
-    if ((insn & 0xFFE0001F) == 0xD4200000) {
-        g_brk_addr = addr;
-        LOG(@"检测到其他 BRK, 继续挂异常处理");
+        g_hook_addr = addr;
+        LOG(@"目标 BLR X8 @ %p (base=%p RVA=0x%lx)", (void *)addr, (void *)base,
+            (unsigned long)RVA_ADDTEXT_BLR);
         return true;
     }
+    // 兼容: 有人已经静态打过 BRK 也能吃
+    if ((insn & 0xFFE0001F) == 0xD4200000) {
+        g_hook_addr = addr;
+        LOG(@"目标已是 BRK @ %p, 继续用异常处理", (void *)addr);
+        return true;
+    }
+    LOG(@"警告: Flutter@%p 指令=%08x, 期望 BLR X8(%08x), 版本可能变了",
+        (void *)addr, insn, INSN_BLR_X8);
     return false;
 }
 
+// 给单个线程装硬件断点 (不改代码页)
+static bool setHwBpOnThread(thread_t thread) {
+    if (!g_hook_addr) return false;
+
+    ibox_arm_debug_state64_t ds;
+    memset(&ds, 0, sizeof(ds));
+    mach_msg_type_number_t cnt = ARM_DEBUG_STATE64_COUNT;
+    kern_return_t kr = thread_get_state(thread, ARM_DEBUG_STATE64,
+                                        (thread_state_t)&ds, &cnt);
+    if (kr != KERN_SUCCESS) {
+        // 有的线程拿不到 debug state, 不算致命
+        return false;
+    }
+
+    // 已装过就跳过
+    if (ds.__bvr[HWBP_SLOT] == (uint64_t)g_hook_addr &&
+        (ds.__bcr[HWBP_SLOT] & 1ULL)) {
+        return true;
+    }
+
+    ds.__bvr[HWBP_SLOT] = (uint64_t)g_hook_addr;
+    ds.__bcr[HWBP_SLOT] = HWBP_BCR_ENABLE;
+
+    cnt = ARM_DEBUG_STATE64_COUNT;
+    kr = thread_set_state(thread, ARM_DEBUG_STATE64, (thread_state_t)&ds, cnt);
+    return kr == KERN_SUCCESS;
+}
+
+// 扫所有线程装 HWBP (新线程也会被定时器补上)
+static int applyHwBpAllThreads() {
+    if (!g_hook_addr) return 0;
+
+    thread_act_array_t threads = nullptr;
+    mach_msg_type_number_t count = 0;
+    kern_return_t kr = task_threads(mach_task_self(), &threads, &count);
+    if (kr != KERN_SUCCESS || !threads) return 0;
+
+    int ok = 0;
+    for (mach_msg_type_number_t i = 0; i < count; i++) {
+        if (setHwBpOnThread(threads[i])) ok++;
+        mach_port_deallocate(mach_task_self(), threads[i]);
+    }
+    vm_deallocate(mach_task_self(), (vm_address_t)threads,
+                  sizeof(thread_t) * count);
+    return ok;
+}
+
 // ---------------------------------------------------------------------------
-//  EXC_BREAKPOINT 异常处理 (不写代码页, iOS 26 安全)
-//  命中我们的 BRK 后:
-//    1) 用 x1 做文本替换
-//    2) 模拟 BLR X8: LR=PC+4, PC=X8
+//  EXC_BREAKPOINT 异常处理 (硬件断点命中, 不写代码页)
+//  1) x1 做文本替换
+//  2) 模拟 BLR X8: LR=PC+4, PC=X8
 // ---------------------------------------------------------------------------
 #pragma pack(push, 4)
 typedef struct {
@@ -918,14 +972,7 @@ typedef struct {
 #pragma pack(pop)
 
 static mach_port_t g_exc_port = MACH_PORT_NULL;
-static exception_mask_t g_old_masks[EXC_TYPES_COUNT];
-static mach_port_t g_old_ports[EXC_TYPES_COUNT];
-static exception_behavior_t g_old_behaviors[EXC_TYPES_COUNT];
-static thread_state_flavor_t g_old_flavors[EXC_TYPES_COUNT];
-static mach_msg_type_number_t g_old_count = 0;
 
-// Xcode 26 SDK: 有 get_pc/set_pc_fptr, 但没有 get_x。
-// arm64 非 arm64e 进程直接走 __x/__pc/__lr 最稳。
 static inline uint64_t ts64_get_pc(const arm_thread_state64_t *s) {
 #if defined(arm_thread_state64_get_pc)
     return (uint64_t)(uintptr_t)arm_thread_state64_get_pc(*s);
@@ -934,7 +981,6 @@ static inline uint64_t ts64_get_pc(const arm_thread_state64_t *s) {
 #endif
 }
 static inline uint64_t ts64_get_x(const arm_thread_state64_t *s, int i) {
-    // 官方头文件没有 arm_thread_state64_get_x, 直接读
     return (uint64_t)s->__x[i];
 }
 static inline void ts64_set_pc(arm_thread_state64_t *s, uint64_t v) {
@@ -953,14 +999,16 @@ static inline void ts64_set_lr(arm_thread_state64_t *s, uint64_t v) {
 }
 
 static bool handle_breakpoint_thread(mach_port_t thread) {
+    // 新线程可能还没 HWBP, 顺手补上
+    setHwBpOnThread(thread);
+
     arm_thread_state64_t st;
     mach_msg_type_number_t cnt = ARM_THREAD_STATE64_COUNT;
     kern_return_t kr = thread_get_state(thread, ARM_THREAD_STATE64, (thread_state_t)&st, &cnt);
     if (kr != KERN_SUCCESS) return false;
 
     uint64_t pc = ts64_get_pc(&st);
-    // 只认我们的静态 BRK 点, 其它断点放行给系统/Sentry
-    if (!g_brk_addr || (pc & ~0x3ULL) != (g_brk_addr & ~0x3ULL)) {
+    if (!g_hook_addr || (pc & ~0x3ULL) != (g_hook_addr & ~0x3ULL)) {
         return false;
     }
 
@@ -969,7 +1017,7 @@ static bool handle_breakpoint_thread(mach_port_t thread) {
 
     rewriteAddTextBuf(x1);
 
-    // 模拟 BLR X8: LR = 下一条, PC = X8
+    // 模拟 BLR X8 (指令本身没执行, 硬件断点在执行前触发)
     if (x8 == 0) {
         ts64_set_pc(&st, pc + 4);
     } else {
@@ -984,7 +1032,7 @@ static bool handle_breakpoint_thread(mach_port_t thread) {
 
 static void *exc_server_thread(void *arg) {
     (void)arg;
-    LOG(@"异常处理线程启动");
+    LOG(@"异常处理线程启动 (HWBP)");
 
     for (;;) {
         uint8_t storage[2048];
@@ -1003,12 +1051,11 @@ static void *exc_server_thread(void *arg) {
             continue;
         }
 
-        // EXCEPTION_DEFAULT | MACH_EXCEPTION_CODES 请求布局
         exc_request_t *req = (exc_request_t *)storage;
         bool handled = false;
 
         if (req->exception == EXC_BREAKPOINT) {
-            if (!g_brk_addr) ensureBrkTarget();
+            if (!g_hook_addr) ensureHookTarget();
             handled = handle_breakpoint_thread(req->thread.name);
         }
 
@@ -1020,7 +1067,6 @@ static void *exc_server_thread(void *arg) {
         reply.head.msgh_size = sizeof(reply);
         reply.head.msgh_id = hdr->msgh_id + 100;
         reply.NDR = NDR_record;
-        // 我们的 BRK → SUCCESS 恢复线程; 其它 → FAILURE 让内核走 fatal/其它逻辑
         reply.RetCode = handled ? KERN_SUCCESS : KERN_FAILURE;
 
         mach_msg(&reply.head, MACH_SEND_MSG | MACH_SEND_TIMEOUT,
@@ -1031,28 +1077,12 @@ static void *exc_server_thread(void *arg) {
 
 static bool installExceptionHandler() {
     if (atomic_load(&g_exc_ready)) return true;
-
-    if (!ensureBrkTarget()) {
-        LOG(@"BRK 目标未就绪, 稍后重试异常处理安装");
+    if (!ensureHookTarget()) {
+        LOG(@"Hook 目标未就绪, 稍后重试");
         return false;
     }
 
     kern_return_t kr;
-
-    // 保存旧 ports (Sentry 等)
-    g_old_count = EXC_TYPES_COUNT;
-    kr = task_get_exception_ports(mach_task_self(),
-                                  EXC_MASK_BREAKPOINT,
-                                  g_old_masks,
-                                  &g_old_count,
-                                  g_old_ports,
-                                  g_old_behaviors,
-                                  g_old_flavors);
-    if (kr != KERN_SUCCESS) {
-        LOG(@"task_get_exception_ports 失败: %d", kr);
-        g_old_count = 0;
-    }
-
     kr = mach_port_allocate(mach_task_self(), MACH_PORT_RIGHT_RECEIVE, &g_exc_port);
     if (kr != KERN_SUCCESS) {
         LOG(@"mach_port_allocate 失败: %d", kr);
@@ -1064,6 +1094,7 @@ static bool installExceptionHandler() {
         return false;
     }
 
+    // 抢 BREAKPOINT (硬件断点 / BRK 都走这)
     kr = task_set_exception_ports(mach_task_self(),
                                   EXC_MASK_BREAKPOINT,
                                   g_exc_port,
@@ -1086,17 +1117,33 @@ static bool installExceptionHandler() {
     }
 
     atomic_store(&g_exc_ready, true);
-    LOG(@"EXC_BREAKPOINT 处理已安装 (无 runtime 写码, iOS26 友好)");
+    LOG(@"EXC_BREAKPOINT 已安装");
     return true;
+}
+
+static bool installHardwareBreakpoint() {
+    if (!ensureHookTarget()) return false;
+    if (!atomic_load(&g_exc_ready)) {
+        if (!installExceptionHandler()) return false;
+    }
+
+    int n = applyHwBpAllThreads();
+    if (n > 0) {
+        atomic_store(&g_hwbp_ok, true);
+        LOG(@"硬件断点已打到 %d 个线程 @ %p", n, (void *)g_hook_addr);
+        return true;
+    }
+    LOG(@"硬件断点 thread_set_state 全失败 (可能被系统拒)");
+    return false;
 }
 
 static void onImageAdded(const struct mach_header *mh, intptr_t slide) {
     (void)mh;
     (void)slide;
-    if (!atomic_load(&g_exc_ready)) {
-        installExceptionHandler();
+    if (!atomic_load(&g_hwbp_ok)) {
+        installHardwareBreakpoint();
     } else {
-        ensureBrkTarget();
+        applyHwBpAllThreads();
     }
 }
 
@@ -1105,35 +1152,50 @@ static void onImageAdded(const struct mach_header *mh, intptr_t slide) {
 // ---------------------------------------------------------------------------
 __attribute__((constructor))
 static void ibox_hook_init() {
-    LOG(@"加载中... build v3 (BRK+exc, no-dobby)");
+    LOG(@"加载中... build v4 (HWBP, 单dylib, 不patch Flutter)");
 
     writeTemplateIfNeeded();
     loadConfig();
 
     // 热更新配置
-    dispatch_source_t timer =
+    dispatch_source_t cfgTimer =
         dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0,
                                dispatch_get_global_queue(QOS_CLASS_BACKGROUND, 0));
-    dispatch_source_set_timer(timer, dispatch_time(DISPATCH_TIME_NOW, 2ull * NSEC_PER_SEC),
+    dispatch_source_set_timer(cfgTimer, dispatch_time(DISPATCH_TIME_NOW, 2ull * NSEC_PER_SEC),
                               2ull * NSEC_PER_SEC, 200ull * NSEC_PER_MSEC);
-    dispatch_source_set_event_handler(timer, ^{ loadConfig(); });
-    dispatch_resume(timer);
+    dispatch_source_set_event_handler(cfgTimer, ^{ loadConfig(); });
+    dispatch_resume(cfgTimer);
 
-    // 异常处理 (依赖静态 patch 过的 Flutter)
-    if (!installExceptionHandler()) {
-        _dyld_register_func_for_add_image(onImageAdded);
-        // 再兜底轮询几次
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1ull * NSEC_PER_SEC),
-                       dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-                           installExceptionHandler();
-                       });
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 3ull * NSEC_PER_SEC),
-                       dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-                           installExceptionHandler();
-                       });
-    }
+    // 硬件断点 + 异常处理 (只注入 dylib, 不碰 Flutter 文件)
+    auto tryInstall = ^{
+        if (!atomic_load(&g_hwbp_ok)) {
+            installHardwareBreakpoint();
+        } else {
+            applyHwBpAllThreads(); // 补新线程
+        }
+    };
+    tryInstall();
+    _dyld_register_func_for_add_image(onImageAdded);
 
-    // 延迟挂悬浮球, 等 UIApplication/Scene 起来
+    // 延迟再试 + 周期补新线程 (Flutter UI 线程可能后起)
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1ull * NSEC_PER_SEC),
+                   dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), tryInstall);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 3ull * NSEC_PER_SEC),
+                   dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), tryInstall);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 8ull * NSEC_PER_SEC),
+                   dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), tryInstall);
+
+    dispatch_source_t bpTimer =
+        dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0,
+                               dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
+    dispatch_source_set_timer(bpTimer, dispatch_time(DISPATCH_TIME_NOW, 5ull * NSEC_PER_SEC),
+                              3ull * NSEC_PER_SEC, 500ull * NSEC_PER_MSEC);
+    dispatch_source_set_event_handler(bpTimer, ^{
+        if (g_hook_addr) applyHwBpAllThreads();
+    });
+    dispatch_resume(bpTimer);
+
+    // 悬浮球
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 4ull * NSEC_PER_SEC),
                    dispatch_get_main_queue(), ^{
                        installFloatingBall();
