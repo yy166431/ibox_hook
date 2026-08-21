@@ -18,6 +18,7 @@
 #include <mach/exception.h>
 #include <mach/thread_status.h>
 #include <pthread.h>
+#include <unistd.h>
 #include <string.h>
 #include <stdlib.h>
 #include <algorithm>
@@ -56,13 +57,24 @@ struct RuleSnap {
     bool enabled;
 };
 
-static std::mutex g_mu;
-static std::map<std::string, std::string> g_exact_utf8;
-static std::string g_wallet_utf8;
+// 全局 C++ 对象用指针+once, 避免 constructor 阶段 static init 顺序炸
+static std::mutex *g_mu_ptr = nullptr;
+static std::map<std::string, std::string> *g_exact_utf8_ptr = nullptr;
+static std::string *g_wallet_utf8_ptr = nullptr;
 static time_t g_cfg_mtime = 0;
 static bool g_enabled = true;
 static int g_hit_count = 0;
 static std::atomic<RuleSnap *> g_snap{nullptr};
+static std::once_flag g_cxx_once;
+
+static void ensureCxx() {
+    std::call_once(g_cxx_once, []{
+        g_mu_ptr = new std::mutex();
+        g_exact_utf8_ptr = new std::map<std::string, std::string>();
+        g_wallet_utf8_ptr = new std::string();
+    });
+}
+static std::mutex &g_mu() { ensureCxx(); return *g_mu_ptr; }
 
 static char16_t *u8_to_u16_heap(const char *u8, uint16_t *outLen) {
     *outLen = 0;
@@ -101,9 +113,10 @@ static void publishSnap(const std::map<std::string, std::string> &exact,
 
     (void)g_snap.exchange(s, std::memory_order_acq_rel); // 旧快照不 free
 
-    std::lock_guard<std::mutex> lk(g_mu);
-    g_exact_utf8 = exact;
-    g_wallet_utf8 = wallet;
+    ensureCxx();
+    std::lock_guard<std::mutex> lk(g_mu());
+    *g_exact_utf8_ptr = exact;
+    *g_wallet_utf8_ptr = wallet;
     g_enabled = enabled;
 }
 
@@ -328,7 +341,7 @@ static void loadConfig() {
     [row addSubview:en];
     self.enableSwitch = [UISwitch new];
     self.enableSwitch.center = CGPointMake(innerW - 40, 22);
-    { std::lock_guard<std::mutex> lk(g_mu); self.enableSwitch.on = g_enabled; }
+    { std::lock_guard<std::mutex> lk(g_mu()); self.enableSwitch.on = g_enabled; }
     [row addSubview:self.enableSwitch];
     y += 56;
 
@@ -704,36 +717,46 @@ static void onImage(const struct mach_header *mh, intptr_t s) {
     else applyHwBpAllThreads();
 }
 
+// constructor 里禁止: ObjC / 复杂 C++ / 读文件 / 装断点
+// 只投递异步任务, 等 runtime 完全起来再干
 __attribute__((constructor))
 static void ibox_hook_init() {
-    LOG(@"v5 HWBP async-safe 单dylib");
-    writeTemplateIfNeeded();
-    loadConfig();
+    // 用 C 的 fprintf 都别用 ObjC LOG — dyld 阶段 Foundation 可能未就绪
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        // 稍等 dyld/Foundation 完全 ready
+        usleep(300 * 1000); // 300ms
+        LOG(@"v5.1 HWBP 延迟初始化");
+        ensureCxx();
+        writeTemplateIfNeeded();
+        loadConfig();
 
-    dispatch_source_t cfg = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0,
-        dispatch_get_global_queue(QOS_CLASS_BACKGROUND, 0));
-    dispatch_source_set_timer(cfg, dispatch_time(DISPATCH_TIME_NOW, 2e9), 2e9, 2e8);
-    dispatch_source_set_event_handler(cfg, ^{ loadConfig(); });
-    dispatch_resume(cfg);
+        dispatch_source_t cfg = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0,
+            dispatch_get_global_queue(QOS_CLASS_BACKGROUND, 0));
+        dispatch_source_set_timer(cfg, dispatch_time(DISPATCH_TIME_NOW, 2e9), 2e9, 2e8);
+        dispatch_source_set_event_handler(cfg, ^{ loadConfig(); });
+        dispatch_resume(cfg);
 
-    auto tryI = ^{
-        if (!g_hwbp_ok.load(std::memory_order_acquire)) installHWBP();
-        else applyHwBpAllThreads();
-    };
-    tryI();
-    _dyld_register_func_for_add_image(onImage);
-    for (int sec : {1, 3, 8}) {
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)sec * NSEC_PER_SEC),
-                       dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), tryI);
-    }
-    dispatch_source_t bp = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0,
-        dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
-    dispatch_source_set_timer(bp, dispatch_time(DISPATCH_TIME_NOW, 5e9), 3e9, 5e8);
-    dispatch_source_set_event_handler(bp, ^{ if (g_hook_addr) applyHwBpAllThreads(); });
-    dispatch_resume(bp);
+        auto tryI = ^{
+            if (!g_hwbp_ok.load(std::memory_order_acquire)) installHWBP();
+            else applyHwBpAllThreads();
+        };
+        tryI();
+        _dyld_register_func_for_add_image(onImage);
+        for (int sec : {1, 3, 8}) {
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)sec * NSEC_PER_SEC),
+                           dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), tryI);
+        }
+        dispatch_source_t bp = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0,
+            dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
+        dispatch_source_set_timer(bp, dispatch_time(DISPATCH_TIME_NOW, 5e9), 3e9, 5e8);
+        dispatch_source_set_event_handler(bp, ^{ if (g_hook_addr) applyHwBpAllThreads(); });
+        dispatch_resume(bp);
 
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 4e9), dispatch_get_main_queue(), ^{ installFloatingBall(); });
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 10e9), dispatch_get_main_queue(), ^{
-        if (!g_floatWin) installFloatingBall();
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 4e9), dispatch_get_main_queue(), ^{
+            installFloatingBall();
+        });
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 10e9), dispatch_get_main_queue(), ^{
+            if (!g_floatWin) installFloatingBall();
+        });
     });
 }
