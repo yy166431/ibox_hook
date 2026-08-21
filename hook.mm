@@ -924,18 +924,32 @@ static exception_behavior_t g_old_behaviors[EXC_TYPES_COUNT];
 static thread_state_flavor_t g_old_flavors[EXC_TYPES_COUNT];
 static mach_msg_type_number_t g_old_count = 0;
 
+// Xcode 26 SDK: 有 get_pc/set_pc_fptr, 但没有 get_x。
+// arm64 非 arm64e 进程直接走 __x/__pc/__lr 最稳。
 static inline uint64_t ts64_get_pc(const arm_thread_state64_t *s) {
-    return (uint64_t)arm_thread_state64_get_pc(*s);
+#if defined(arm_thread_state64_get_pc)
+    return (uint64_t)(uintptr_t)arm_thread_state64_get_pc(*s);
+#else
+    return (uint64_t)s->__pc;
+#endif
 }
 static inline uint64_t ts64_get_x(const arm_thread_state64_t *s, int i) {
-    return (uint64_t)arm_thread_state64_get_x(*s, i);
+    // 官方头文件没有 arm_thread_state64_get_x, 直接读
+    return (uint64_t)s->__x[i];
 }
 static inline void ts64_set_pc(arm_thread_state64_t *s, uint64_t v) {
-    // 宏吃 struct lvalue, 不是指针
+#if defined(arm_thread_state64_set_pc_fptr)
     arm_thread_state64_set_pc_fptr(*s, (void *)(uintptr_t)v);
+#else
+    s->__pc = v;
+#endif
 }
 static inline void ts64_set_lr(arm_thread_state64_t *s, uint64_t v) {
+#if defined(arm_thread_state64_set_lr_fptr)
     arm_thread_state64_set_lr_fptr(*s, (void *)(uintptr_t)v);
+#else
+    s->__lr = v;
+#endif
 }
 
 static bool handle_breakpoint_thread(mach_port_t thread) {
