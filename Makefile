@@ -8,9 +8,9 @@ include $(THEOS)/makefiles/common.mk
 TWEAK_NAME = iboxhook
 
 iboxhook_FILES = hook.mm
-iboxhook_CFLAGS = -fobjc-arc -Wno-unused-variable
+iboxhook_CFLAGS = -fobjc-arc -Wno-unused-variable -Wno-unused-function
 iboxhook_CCFLAGS = -std=c++17
-iboxhook_FRAMEWORKS = Foundation UIKit
+iboxhook_FRAMEWORKS = Foundation UIKit CoreGraphics
 iboxhook_LIBRARIES = dobby
 
 include $(THEOS_MAKE_PATH)/tweak.mk

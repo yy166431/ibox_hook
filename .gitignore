@@ -9,3 +9,7 @@ dobby-include/
 libdobby.a
 dobby.h
 .DS_Store
+Runner_original*
+crashlogs/
+*.ipa
+Payload/

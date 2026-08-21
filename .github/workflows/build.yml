@@ -12,55 +12,52 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # ---------------------------------------------------------------
-      # 1. 直接下 Dobby 官方预编译 iOS arm64 静态库 (免 CMake 交叉编译)
-      #    jmpews/Dobby releases/latest -> dobby-iphoneos-all.tar.gz
-      #    里面有 build/iphoneos/arm64/libdobby.a + build/iphoneos/dobby.h
-      # ---------------------------------------------------------------
       - name: Fetch prebuilt Dobby (iOS arm64 static)
         run: |
+          set -e
           curl -sL "https://github.com/jmpews/Dobby/releases/download/latest/dobby-iphoneos-all.tar.gz" -o dobby-ios.tar.gz
           mkdir -p dobby-ios
           tar -xzf dobby-ios.tar.gz -C dobby-ios
-          cp dobby-ios/build/iphoneos/arm64/libdobby.a "$GITHUB_WORKSPACE/libdobby.a"
-          cp dobby-ios/build/iphoneos/dobby.h          "$GITHUB_WORKSPACE/dobby.h"
-          echo "=== libdobby.a ==="
-          ls -la "$GITHUB_WORKSPACE/libdobby.a"
-          file "$GITHUB_WORKSPACE/libdobby.a"
+          # 兼容不同解压布局
+          LIB=$(find dobby-ios -name 'libdobby.a' | head -1)
+          HDR=$(find dobby-ios -name 'dobby.h' | head -1)
+          if [ -z "$LIB" ] || [ -z "$HDR" ]; then
+            echo "Dobby 预编译包结构变了, 列目录:"
+            find dobby-ios -maxdepth 5 -type f | head -50
+            exit 1
+          fi
+          cp "$LIB" "$GITHUB_WORKSPACE/libdobby.a"
+          cp "$HDR" "$GITHUB_WORKSPACE/dobby.h"
+          ls -la "$GITHUB_WORKSPACE/libdobby.a" "$GITHUB_WORKSPACE/dobby.h"
           lipo -info "$GITHUB_WORKSPACE/libdobby.a" || true
-          echo "=== dobby.h ==="
-          head -5 "$GITHUB_WORKSPACE/dobby.h"
+          file "$GITHUB_WORKSPACE/libdobby.a"
 
-      # ---------------------------------------------------------------
-      # 2. 编译 hook.mm -> iboxhook.dylib (静态链接 Dobby, 裸 dylib 无 substrate)
-      # ---------------------------------------------------------------
       - name: Compile hook.mm -> dylib
         run: |
+          set -e
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          echo "SDK=$SDK"
           clang++ -arch arm64 \
             -isysroot "$SDK" \
             -miphoneos-version-min=14.0 \
             -std=c++17 -fobjc-arc \
+            -fvisibility=hidden \
+            -O2 \
             -dynamiclib \
             -I"$GITHUB_WORKSPACE" \
             -framework Foundation -framework UIKit -framework CoreGraphics \
-            -Wl,-no_warn_duplicate_libraries \
             -install_name "@rpath/iboxhook.dylib" \
             hook.mm "$GITHUB_WORKSPACE/libdobby.a" \
             -o iboxhook.dylib
-          echo "=== 编译完成 ==="
           file iboxhook.dylib
           otool -L iboxhook.dylib
-          otool -l iboxhook.dylib | grep -A2 LC_ID_DYLIB
+          otool -l iboxhook.dylib | grep -A2 LC_ID_DYLIB || true
+          ls -la iboxhook.dylib
 
-      # ---------------------------------------------------------------
-      # 3. ldid 伪签名 (sideload 前重签工具会重新签, 这里先自签保证结构完整)
-      # ---------------------------------------------------------------
       - name: Fake-sign with ldid
         run: |
           brew install ldid || true
           ldid -S iboxhook.dylib || true
-          echo "=== 最终产物 ==="
           ls -la iboxhook.dylib
           file iboxhook.dylib
 
