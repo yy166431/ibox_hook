@@ -497,40 +497,66 @@ static void loadConfig() {
 - (void)ibox_handlePan:(UIPanGestureRecognizer *)pan;
 @end
 
-@interface RuleEditorPanel : UIViewController <UITextViewDelegate>
+@interface RuleEditorPanel : UIViewController <UITextViewDelegate, UITextFieldDelegate>
 @property (nonatomic, strong) UIWindow *panelWindow;
 @property (nonatomic, strong) UIScrollView *scroll;
+@property (nonatomic, strong) UIView *bottomBar;
 @property (nonatomic, strong) UISwitch *enableSwitch;
-@property (nonatomic, strong) UITextView *walletField;
-@property (nonatomic, strong) UITextView *holdField;
-@property (nonatomic, strong) UITextView *yenField;
+@property (nonatomic, strong) UITextField *walletField;
+@property (nonatomic, strong) UITextField *holdField;
+@property (nonatomic, strong) UITextField *yenField;
 @property (nonatomic, strong) UITextView *exactField;
 @property (nonatomic, strong) UILabel *statusLabel;
+@property (nonatomic, assign) CGFloat barBaseY;
 @end
+
+static void setFloatVisible(BOOL vis);
+static void hideFloatForCapture(void);
 
 @implementation RuleEditorPanel
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.view.backgroundColor = [UIColor colorWithWhite:0.08 alpha:0.97];
     CGFloat W = self.view.bounds.size.width, H = self.view.bounds.size.height, pad = 16, innerW = W - 32;
+    CGFloat barH = 80 + self.view.safeAreaInsets.bottom;
+    if (barH < 90) barH = 96;
 
     UIView *nav = [[UIView alloc] initWithFrame:CGRectMake(0, 0, W, 96)];
     nav.backgroundColor = [UIColor colorWithRed:0.12 green:0.14 blue:0.20 alpha:1];
+    nav.tag = 9001;
     [self.view addSubview:nav];
-    UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(pad, 48, innerW - 80, 36)];
+    UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(pad, 48, innerW - 120, 36)];
     title.text = @"爱盒 Hook"; title.textColor = UIColor.whiteColor;
     title.font = [UIFont boldSystemFontOfSize:22];
     [nav addSubview:title];
+
+    // 收键盘按钮放导航栏
+    UIButton *doneKb = [UIButton buttonWithType:UIButtonTypeSystem];
+    doneKb.frame = CGRectMake(W - 160, 48, 56, 36);
+    [doneKb setTitle:@"收起" forState:UIControlStateNormal];
+    [doneKb setTitleColor:[UIColor colorWithRed:0.4 green:0.75 blue:1 alpha:1] forState:UIControlStateNormal];
+    doneKb.titleLabel.font = [UIFont boldSystemFontOfSize:16];
+    [doneKb addTarget:self action:@selector(dismissKeyboard) forControlEvents:UIControlEventTouchUpInside];
+    [nav addSubview:doneKb];
+
     UIButton *x = [UIButton buttonWithType:UIButtonTypeSystem];
     x.frame = CGRectMake(W - 60, 48, 44, 36);
     [x setTitle:@"✕" forState:UIControlStateNormal];
     [x setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+    x.titleLabel.font = [UIFont systemFontOfSize:22 weight:UIFontWeightMedium];
     [x addTarget:self action:@selector(closePanel) forControlEvents:UIControlEventTouchUpInside];
     [nav addSubview:x];
 
-    self.scroll = [[UIScrollView alloc] initWithFrame:CGRectMake(0, 96, W, H - 96 - 80)];
-    self.scroll.keyboardDismissMode = UIScrollViewKeyboardDismissModeOnDrag;
+    self.scroll = [[UIScrollView alloc] initWithFrame:CGRectMake(0, 96, W, H - 96 - barH)];
+    self.scroll.keyboardDismissMode = UIScrollViewKeyboardDismissModeInteractive;
+    self.scroll.alwaysBounceVertical = YES;
     [self.view addSubview:self.scroll];
+
+    // 点空白收键盘
+    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(dismissKeyboard)];
+    tap.cancelsTouchesInView = NO;
+    [self.scroll addGestureRecognizer:tap];
+
     CGFloat y = 16;
 
     UIView *row = [[UIView alloc] initWithFrame:CGRectMake(pad, y, innerW, 44)];
@@ -556,46 +582,122 @@ static void loadConfig() {
     UILabel *wl = [[UILabel alloc] initWithFrame:CGRectMake(pad, y, innerW, 20)];
     wl.text = @"钱包 (0x… 保长)"; wl.textColor = [UIColor colorWithWhite:0.7 alpha:1];
     wl.font = [UIFont systemFontOfSize:13]; [self.scroll addSubview:wl]; y += 24;
-    self.walletField = [self tv:CGRectMake(pad, y, innerW, 44)]; y += 56;
+    self.walletField = [self tf:CGRectMake(pad, y, innerW, 44)]; y += 56;
 
     UILabel *hl = [[UILabel alloc] initWithFrame:CGRectMake(pad, y, innerW, 20)];
     hl.text = @"「持有」后面的数字 (空=关闭)"; hl.textColor = [UIColor colorWithWhite:0.7 alpha:1];
     hl.font = [UIFont systemFontOfSize:13]; [self.scroll addSubview:hl]; y += 24;
-    self.holdField = [self tv:CGRectMake(pad, y, innerW, 40)]; y += 52;
+    self.holdField = [self tf:CGRectMake(pad, y, innerW, 44)];
+    self.holdField.keyboardType = UIKeyboardTypeNumberPad; y += 56;
 
     UILabel *yl = [[UILabel alloc] initWithFrame:CGRectMake(pad, y, innerW, 20)];
     yl.text = @"「¥/￥」后面的数字 (空=关闭)"; yl.textColor = [UIColor colorWithWhite:0.7 alpha:1];
     yl.font = [UIFont systemFontOfSize:13]; [self.scroll addSubview:yl]; y += 24;
-    self.yenField = [self tv:CGRectMake(pad, y, innerW, 40)]; y += 52;
+    self.yenField = [self tf:CGRectMake(pad, y, innerW, 44)];
+    self.yenField.keyboardType = UIKeyboardTypeNumberPad; y += 56;
 
     UILabel *el = [[UILabel alloc] initWithFrame:CGRectMake(pad, y, innerW, 20)];
     el.text = @"精确/包含 (原文=>新文 每行一条, 支持中文)"; el.textColor = [UIColor colorWithWhite:0.7 alpha:1];
     el.font = [UIFont systemFontOfSize:13]; [self.scroll addSubview:el]; y += 24;
     self.exactField = [self tv:CGRectMake(pad, y, innerW, 180)]; y += 200;
 
-    self.scroll.contentSize = CGSizeMake(W, y + 20);
+    // 多留空白, 键盘顶起时能滚到保存区
+    self.scroll.contentSize = CGSizeMake(W, y + 40);
 
-    UIView *bar = [[UIView alloc] initWithFrame:CGRectMake(0, H - 80, W, 80)];
-    bar.backgroundColor = [UIColor colorWithWhite:0.1 alpha:1];
-    [self.view addSubview:bar];
+    self.barBaseY = H - barH;
+    self.bottomBar = [[UIView alloc] initWithFrame:CGRectMake(0, self.barBaseY, W, barH)];
+    self.bottomBar.backgroundColor = [UIColor colorWithWhite:0.1 alpha:1];
+    [self.view addSubview:self.bottomBar];
+
     UIButton *save = [UIButton buttonWithType:UIButtonTypeSystem];
     save.frame = CGRectMake(pad, 12, (innerW - 12) / 2, 48);
     [save setTitle:@"保存生效" forState:UIControlStateNormal];
     save.backgroundColor = [UIColor colorWithRed:0.18 green:0.52 blue:1 alpha:1];
     [save setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+    save.titleLabel.font = [UIFont boldSystemFontOfSize:17];
     save.layer.cornerRadius = 12;
     [save addTarget:self action:@selector(saveAndClose) forControlEvents:UIControlEventTouchUpInside];
-    [bar addSubview:save];
+    [self.bottomBar addSubview:save];
+
     UIButton *cls = [UIButton buttonWithType:UIButtonTypeSystem];
     cls.frame = CGRectMake(pad + (innerW - 12) / 2 + 12, 12, (innerW - 12) / 2, 48);
     [cls setTitle:@"关闭" forState:UIControlStateNormal];
     cls.backgroundColor = [UIColor colorWithWhite:0.25 alpha:1];
     [cls setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+    cls.titleLabel.font = [UIFont boldSystemFontOfSize:17];
     cls.layer.cornerRadius = 12;
     [cls addTarget:self action:@selector(closePanel) forControlEvents:UIControlEventTouchUpInside];
-    [bar addSubview:cls];
+    [self.bottomBar addSubview:cls];
+
+    // 键盘避让: 底栏抬到键盘上方
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(kbWill:)
+                                                 name:UIKeyboardWillChangeFrameNotification object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(kbWill:)
+                                                 name:UIKeyboardWillHideNotification object:nil];
 
     [self loadCurrentRules];
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+}
+
+- (void)dismissKeyboard {
+    [self.view endEditing:YES];
+}
+
+- (void)kbWill:(NSNotification *)n {
+    CGRect end = [n.userInfo[UIKeyboardFrameEndUserInfoKey] CGRectValue];
+    end = [self.view convertRect:end fromView:nil];
+    NSTimeInterval dur = [n.userInfo[UIKeyboardAnimationDurationUserInfoKey] doubleValue];
+    UIViewAnimationCurve curve = (UIViewAnimationCurve)[n.userInfo[UIKeyboardAnimationCurveUserInfoKey] integerValue];
+
+    CGFloat overlap = MAX(0, self.view.bounds.size.height - end.origin.y);
+    // 键盘收起时 end 在屏外, overlap=0
+    if (end.origin.y >= self.view.bounds.size.height) overlap = 0;
+
+    CGFloat barH = self.bottomBar.bounds.size.height;
+    CGFloat newBarY = self.view.bounds.size.height - barH - overlap;
+    CGFloat scrollH = newBarY - 96;
+
+    [UIView beginAnimations:nil context:nil];
+    [UIView setAnimationDuration:dur];
+    [UIView setAnimationCurve:curve];
+    [UIView setAnimationBeginsFromCurrentState:YES];
+    CGRect bf = self.bottomBar.frame; bf.origin.y = newBarY; self.bottomBar.frame = bf;
+    CGRect sf = self.scroll.frame; sf.size.height = MAX(120, scrollH); self.scroll.frame = sf;
+    UIEdgeInsets inset = self.scroll.contentInset;
+    inset.bottom = 12;
+    self.scroll.contentInset = inset;
+    self.scroll.scrollIndicatorInsets = inset;
+    [UIView commitAnimations];
+}
+
+- (UIToolbar *)kbToolbar {
+    UIToolbar *tb = [[UIToolbar alloc] initWithFrame:CGRectMake(0, 0, self.view.bounds.size.width, 44)];
+    tb.barStyle = UIBarStyleBlack;
+    UIBarButtonItem *flex = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil];
+    UIBarButtonItem *done = [[UIBarButtonItem alloc] initWithTitle:@"完成" style:UIBarButtonItemStyleDone target:self action:@selector(dismissKeyboard)];
+    tb.items = @[flex, done];
+    return tb;
+}
+
+- (UITextField *)tf:(CGRect)f {
+    UITextField *t = [[UITextField alloc] initWithFrame:f];
+    t.backgroundColor = [UIColor colorWithWhite:0.16 alpha:1];
+    t.textColor = UIColor.whiteColor;
+    t.font = [UIFont systemFontOfSize:15];
+    t.layer.cornerRadius = 10;
+    t.leftView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 12, 1)];
+    t.leftViewMode = UITextFieldViewModeAlways;
+    t.autocorrectionType = UITextAutocorrectionTypeNo;
+    t.autocapitalizationType = UITextAutocapitalizationTypeNone;
+    t.returnKeyType = UIReturnKeyDone;
+    t.delegate = self;
+    t.inputAccessoryView = [self kbToolbar];
+    t.clearButtonMode = UITextFieldViewModeWhileEditing;
+    [self.scroll addSubview:t];
+    return t;
 }
 - (UITextView *)tv:(CGRect)f {
     UITextView *t = [[UITextView alloc] initWithFrame:f];
@@ -603,7 +705,14 @@ static void loadConfig() {
     t.textColor = UIColor.whiteColor; t.font = [UIFont systemFontOfSize:14];
     t.layer.cornerRadius = 10; t.autocorrectionType = UITextAutocorrectionTypeNo;
     t.autocapitalizationType = UITextAutocapitalizationTypeNone;
-    t.delegate = self; [self.scroll addSubview:t]; return t;
+    t.delegate = self;
+    t.inputAccessoryView = [self kbToolbar];
+    t.textContainerInset = UIEdgeInsetsMake(10, 8, 10, 8);
+    [self.scroll addSubview:t]; return t;
+}
+- (BOOL)textFieldShouldReturn:(UITextField *)textField {
+    [textField resignFirstResponder];
+    return YES;
 }
 - (void)loadCurrentRules {
     NSData *data = [NSData dataWithContentsOfFile:configPath()];
@@ -619,13 +728,14 @@ static void loadConfig() {
     NSDictionary *exact = json[@"exact"];
     if ([exact isKindOfClass:[NSDictionary class]]) {
         for (NSString *k in [[exact allKeys] sortedArrayUsingSelector:@selector(compare:)]) {
-            if ([k isEqualToString:@"持有"]) continue; // 旧错误规则
+            if ([k isEqualToString:@"持有"]) continue;
             [lines addObject:[NSString stringWithFormat:@"%@=>%@", k, exact[k]]];
         }
     }
     self.exactField.text = [lines componentsJoinedByString:@"\n"];
 }
 - (void)saveAndClose {
+    [self dismissKeyboard];
     NSMutableDictionary *json = [NSMutableDictionary dictionary];
     json[@"_ver"] = @6;
     json[@"enabled"] = @(self.enableSwitch.on);
@@ -652,8 +762,9 @@ static void loadConfig() {
     [self closePanel];
 }
 - (void)closePanel {
-    [self.view endEditing:YES];
+    [self dismissKeyboard];
     self.panelWindow.hidden = YES; self.panelWindow = nil;
+    setFloatVisible(YES); // 编辑器关了再显示球
 }
 + (UIWindow *)makeWin:(CGRect)frame {
     UIWindow *w = nil;
@@ -671,6 +782,8 @@ static void loadConfig() {
 + (void)toggle {
     static RuleEditorPanel *inst;
     if (inst && inst.panelWindow && !inst.panelWindow.hidden) { [inst closePanel]; inst = nil; return; }
+    // 打开编辑器时藏悬浮球, 避免截到
+    setFloatVisible(NO);
     inst = [RuleEditorPanel new];
     UIWindow *w = [self makeWin:UIScreen.mainScreen.bounds];
     w.windowLevel = UIWindowLevelAlert + 300;
@@ -682,11 +795,59 @@ static void loadConfig() {
 static UIWindow *g_floatWin;
 static UIButton *g_floatBtn;
 static BOOL g_userHiddenFloat;
+static BOOL g_captureHidden; // 截图/录屏强制藏
+static UITextField *g_secureHost; // 安全层宿主, 系统截图不录这层内容
 
 static void setFloatVisible(BOOL vis) {
     if (!g_floatWin) return;
-    g_floatWin.hidden = g_userHiddenFloat ? YES : !vis;
+    if (g_userHiddenFloat || g_captureHidden) {
+        g_floatWin.hidden = YES;
+        g_floatWin.alpha = 0;
+        return;
+    }
+    g_floatWin.hidden = !vis;
+    g_floatWin.alpha = vis ? 1 : 0;
 }
+
+// 把悬浮球嵌进 secureTextEntry 的内部视图 → 系统截图/录屏通常拍不到
+static UIView *secureCanvasInWindow(UIWindow *win) {
+    if (!g_secureHost) {
+        g_secureHost = [[UITextField alloc] initWithFrame:win.bounds];
+        g_secureHost.secureTextEntry = YES;
+        g_secureHost.userInteractionEnabled = YES;
+        g_secureHost.backgroundColor = UIColor.clearColor;
+        // 不要成为 first responder
+        g_secureHost.enabled = YES;
+    }
+    if (g_secureHost.superview != win) {
+        [g_secureHost removeFromSuperview];
+        g_secureHost.frame = win.bounds;
+        g_secureHost.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        [win addSubview:g_secureHost];
+    }
+    // secure 字段内部有一层不会进截图的 canvas
+    UIView *canvas = nil;
+    for (UIView *v in g_secureHost.subviews) {
+        // iOS 各版本类名不同, 取第一个有内容的子视图
+        NSString *cn = NSStringFromClass(v.class);
+        if ([cn containsString:@"TextLayout"] || [cn containsString:@"Canvas"] ||
+            [cn containsString:@"Secure"] || v.subviews.count >= 0) {
+            canvas = v;
+            // 优先名字像 canvas 的
+            if ([cn containsString:@"Canvas"] || [cn containsString:@"Layout"]) break;
+        }
+    }
+    if (!canvas) canvas = g_secureHost.subviews.firstObject;
+    if (!canvas) canvas = g_secureHost; // 兜底
+    canvas.userInteractionEnabled = YES;
+    return canvas;
+}
+
+static void hideFloatForCapture(void) {
+    g_captureHidden = YES;
+    setFloatVisible(NO);
+}
+
 static void installFloatingBall() {
     if (g_floatWin) return;
     CGFloat sw = UIScreen.mainScreen.bounds.size.width;
@@ -695,7 +856,10 @@ static void installFloatingBall() {
     g_floatWin.backgroundColor = UIColor.clearColor;
     g_floatWin.rootViewController = [UIViewController new];
     g_floatWin.rootViewController.view.backgroundColor = UIColor.clearColor;
+    g_floatWin.rootViewController.view.hidden = YES;
     g_floatWin.hidden = NO;
+
+    UIView *canvas = secureCanvasInWindow(g_floatWin);
 
     g_floatBtn = [UIButton buttonWithType:UIButtonTypeCustom];
     g_floatBtn.frame = CGRectMake(0, 0, 56, 56);
@@ -703,36 +867,73 @@ static void installFloatingBall() {
     g_floatBtn.layer.cornerRadius = 28;
     [g_floatBtn setTitle:@"爱盒" forState:UIControlStateNormal];
     g_floatBtn.titleLabel.font = [UIFont boldSystemFontOfSize:14];
-    [g_floatBtn addTarget:RuleEditorPanel.class action:@selector(toggle) forControlEvents:UIControlEventTouchUpInside];
-    [g_floatWin.rootViewController.view addSubview:g_floatBtn];
-    UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:g_floatBtn action:@selector(ibox_handlePan:)];
-    [g_floatBtn addGestureRecognizer:pan];
+    [g_floatBtn addTarget:RuleEditorPanel.class action:@selector(toggle)
+         forControlEvents:UIControlEventTouchUpInside];
+    [canvas addSubview:g_floatBtn];
     objc_setAssociatedObject(g_floatBtn, "floatWin", g_floatWin, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
-    [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationUserDidTakeScreenshotNotification
-        object:nil queue:NSOperationQueue.mainQueue usingBlock:^(__unused NSNotification *n) {
-            setFloatVisible(NO);
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2e9), dispatch_get_main_queue(), ^{ setFloatVisible(YES); });
-        }];
+    UIPanGestureRecognizer *pan =
+        [[UIPanGestureRecognizer alloc] initWithTarget:g_floatBtn action:@selector(ibox_handlePan:)];
+    [g_floatBtn addGestureRecognizer:pan];
+
+    // 长按隐藏 10 秒, 方便截图 (secure 层失败时的后备)
+    UILongPressGestureRecognizer *longP =
+        [[UILongPressGestureRecognizer alloc] initWithTarget:g_floatBtn action:@selector(ibox_longHide:)];
+    longP.minimumPressDuration = 0.45;
+    [g_floatBtn addGestureRecognizer:longP];
+
     if (@available(iOS 11.0, *)) {
-        [NSTimer scheduledTimerWithTimeInterval:0.5 repeats:YES block:^(__unused NSTimer *t) {
-            setFloatVisible(!UIScreen.mainScreen.isCaptured);
-        }];
+        [[NSNotificationCenter defaultCenter]
+            addObserverForName:UIScreenCapturedDidChangeNotification
+                        object:nil queue:NSOperationQueue.mainQueue
+                    usingBlock:^(__unused NSNotification *n) {
+                        g_captureHidden = UIScreen.mainScreen.isCaptured;
+                        setFloatVisible(!g_captureHidden);
+                    }];
+        g_captureHidden = UIScreen.mainScreen.isCaptured;
+        if (g_captureHidden) setFloatVisible(NO);
     }
-    LOG(@"悬浮球就绪");
+
+    // 截图通知是拍完才发, 主要靠 secure 层; 这里只做收尾
+    [[NSNotificationCenter defaultCenter]
+        addObserverForName:UIApplicationUserDidTakeScreenshotNotification
+                    object:nil queue:NSOperationQueue.mainQueue
+                usingBlock:^(__unused NSNotification *n) {
+                    hideFloatForCapture();
+                    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.2 * NSEC_PER_SEC)),
+                                   dispatch_get_main_queue(), ^{
+                        g_captureHidden = UIScreen.mainScreen.isCaptured;
+                        setFloatVisible(YES);
+                    });
+                }];
+
+    LOG(@"悬浮球就绪 (secure层+长按藏10秒)");
 }
+
 @implementation UIButton (IBoxFloatDrag)
 - (void)ibox_handlePan:(UIPanGestureRecognizer *)pan {
     UIWindow *win = objc_getAssociatedObject(self, "floatWin");
     if (!win) return;
-    CGPoint tr = [pan translationInView:win];
+    CGPoint tr = [pan translationInView:nil];
     CGRect f = win.frame; f.origin.x += tr.x; f.origin.y += tr.y;
     CGSize sc = UIScreen.mainScreen.bounds.size;
     if (f.origin.x < 4) f.origin.x = 4;
     if (f.origin.y < 44) f.origin.y = 44;
     if (f.origin.x + f.size.width > sc.width - 4) f.origin.x = sc.width - 4 - f.size.width;
     if (f.origin.y + f.size.height > sc.height - 4) f.origin.y = sc.height - 4 - f.size.height;
-    win.frame = f; [pan setTranslation:CGPointZero inView:win];
+    win.frame = f;
+    if (g_secureHost) g_secureHost.frame = win.bounds;
+    [pan setTranslation:CGPointZero inView:nil];
+}
+- (void)ibox_longHide:(UILongPressGestureRecognizer *)gr {
+    if (gr && gr.state != UIGestureRecognizerStateBegan) return;
+    g_userHiddenFloat = YES;
+    setFloatVisible(NO);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(10 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        g_userHiddenFloat = NO;
+        if (!g_captureHidden) setFloatVisible(YES);
+    });
 }
 @end
 
