@@ -12,27 +12,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Fetch prebuilt Dobby (iOS arm64 static)
-        run: |
-          set -e
-          curl -sL "https://github.com/jmpews/Dobby/releases/download/latest/dobby-iphoneos-all.tar.gz" -o dobby-ios.tar.gz
-          mkdir -p dobby-ios
-          tar -xzf dobby-ios.tar.gz -C dobby-ios
-          # 兼容不同解压布局
-          LIB=$(find dobby-ios -name 'libdobby.a' | head -1)
-          HDR=$(find dobby-ios -name 'dobby.h' | head -1)
-          if [ -z "$LIB" ] || [ -z "$HDR" ]; then
-            echo "Dobby 预编译包结构变了, 列目录:"
-            find dobby-ios -maxdepth 5 -type f | head -50
-            exit 1
-          fi
-          cp "$LIB" "$GITHUB_WORKSPACE/libdobby.a"
-          cp "$HDR" "$GITHUB_WORKSPACE/dobby.h"
-          ls -la "$GITHUB_WORKSPACE/libdobby.a" "$GITHUB_WORKSPACE/dobby.h"
-          lipo -info "$GITHUB_WORKSPACE/libdobby.a" || true
-          file "$GITHUB_WORKSPACE/libdobby.a"
-
-      - name: Compile hook.mm -> dylib
+      # v3: 不再链 Dobby。iOS26 轻松签下 runtime 改 __TEXT 会被 CODESIGNING 秒杀。
+      # hook 改为静态 BRK + EXC_BREAKPOINT 异常处理。
+      - name: Compile hook.mm -> dylib (no dobby)
         run: |
           set -e
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
@@ -44,15 +26,24 @@ jobs:
             -fvisibility=hidden \
             -O2 \
             -dynamiclib \
-            -I"$GITHUB_WORKSPACE" \
             -framework Foundation -framework UIKit -framework CoreGraphics \
             -install_name "@rpath/iboxhook.dylib" \
-            hook.mm "$GITHUB_WORKSPACE/libdobby.a" \
+            hook.mm \
             -o iboxhook.dylib
           file iboxhook.dylib
           otool -L iboxhook.dylib
           otool -l iboxhook.dylib | grep -A2 LC_ID_DYLIB || true
           ls -la iboxhook.dylib
+          # 确认没链奇怪的 substrate
+          ! otool -L iboxhook.dylib | grep -i substrate
+
+      - name: Patch Flutter binary (BRK)
+        run: |
+          set -e
+          # 仓库不一定带原始 Flutter; 有 tools 脚本即可。artifact 只出 dylib。
+          # 用户本地用 tools/patch_flutter.py 打自己 IPA 里的 Flutter。
+          python3 tools/patch_flutter.py --help
+          ls -la tools/
 
       - name: Fake-sign with ldid
         run: |
@@ -65,5 +56,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: iboxhook-dylib
-          path: iboxhook.dylib
+          path: |
+            iboxhook.dylib
+            tools/patch_flutter.py
           if-no-files-found: error

@@ -15,6 +15,11 @@
 //    - External: 写 chars 到 ptr, 更新 len@+8 (clamp 到 capacity)
 //    - Inline:   写 chars 到 buf, 更新 flag=(len&0x7f), 最多 11 字符
 //
+//  iOS 26 注意:
+//    轻松签 + 运行时 Dobby/inline hook 会改 __TEXT 页权限 → CODESIGNING/Invalid Page 秒杀。
+//    正确姿势: 离线把 Flutter@0x481ca8 的 BLR X8 打成 BRK #0xCA8,
+//    dylib 只挂 EXC_BREAKPOINT 异常处理, 改寄存器模拟 BLR, 绝不写代码页。
+//
 //  作者: 海鸥
 // ============================================================================
 #import <Foundation/Foundation.h>
@@ -22,13 +27,18 @@
 #import <objc/runtime.h>
 #include <dlfcn.h>
 #include <mach-o/dyld.h>
+#include <mach/mach.h>
+#include <mach/exception.h>
+#include <mach/thread_status.h>
+#include <pthread.h>
+#include <string.h>
 #include <algorithm>
 #include <string>
 #include <vector>
 #include <map>
 #include <mutex>
 #include <regex>
-#include "dobby.h"
+#include <stdatomic.h>
 
 #define TAG "[ibox_hook] "
 static inline void LOG(NSString *fmt, ...) {
@@ -40,7 +50,11 @@ static inline void LOG(NSString *fmt, ...) {
 }
 
 // Flutter.framework 内 ParagraphBuilder::addText 的 blr 点, 版本锁定
+// 离线 patch: BLR X8 (D63F0100) -> BRK #0xCA8 (D4219500)
 static const uintptr_t RVA_ADDTEXT_BLR = 0x481ca8;
+static const uint32_t  INSN_BLR_X8     = 0xD63F0100;
+static const uint32_t  INSN_BRK_CA8    = 0xD4219500; // BRK #0xCA8
+static const uint16_t  BRK_IMM         = 0x0CA8;
 
 // ---------------------------------------------------------------------------
 //  UTF-16 SSO 缓冲 (0x18 字节, 栈上)
@@ -687,12 +701,11 @@ static bool applyRules(const std::string &in, std::string &out) {
 }
 
 // ---------------------------------------------------------------------------
-//  Hook 回调: 0x481ca8 blr x8 前, x1 = &UTF16Buf
+//  文本替换核心: x1 = &UTF16Buf
 // ---------------------------------------------------------------------------
-static void onAddText(void *address, DobbyRegisterContext *ctx) {
-    (void)address;
-    UTF16Buf *buf = (UTF16Buf *)ctx->general.regs.x1;
-    if (!buf) return;
+static void rewriteAddTextBuf(uint64_t x1) {
+    if (!x1) return;
+    UTF16Buf *buf = (UTF16Buf *)x1;
 
     std::u16string u16;
     try {
@@ -821,26 +834,23 @@ static void installFloatingBall() {
 @end
 
 // ---------------------------------------------------------------------------
-//  找 Flutter base
+//  找 Flutter base + 校验静态 BRK patch
 // ---------------------------------------------------------------------------
 static uintptr_t findFlutterBase() {
     uint32_t n = _dyld_image_count();
     for (uint32_t i = 0; i < n; i++) {
         const char *name = _dyld_get_image_name(i);
         if (!name) continue;
-        // Flutter.framework/Flutter 或末尾 /Flutter
         if (strstr(name, "Flutter.framework/Flutter") != nullptr) {
             return (uintptr_t)_dyld_get_image_header(i);
         }
     }
-    // 兜底: 有的包路径大小写/符号链接不同
     for (uint32_t i = 0; i < n; i++) {
         const char *name = _dyld_get_image_name(i);
         if (!name) continue;
-        size_t len = strlen(name);
-        if (len >= 7 && strcmp(name + len - 7, "Flutter") == 0) {
-            // 排除 App 自己叫 Flutter 的极端情况: 必须带 framework
-            if (strstr(name, "Flutter.framework") || strstr(name, "Flutter.framework")) {
+        if (strstr(name, "Flutter.framework") != nullptr) {
+            size_t len = strlen(name);
+            if (len >= 7 && strcmp(name + len - 7, "Flutter") == 0) {
                 return (uintptr_t)_dyld_get_image_header(i);
             }
         }
@@ -848,32 +858,232 @@ static uintptr_t findFlutterBase() {
     return 0;
 }
 
-static void tryInstallHook() {
-    static bool installed = false;
-    if (installed) return;
+static uintptr_t g_brk_addr = 0;
+static _Atomic bool g_exc_ready = false;
 
+static bool ensureBrkTarget() {
+    if (g_brk_addr) return true;
     uintptr_t base = findFlutterBase();
-    if (!base) {
-        LOG(@"Flutter.framework 尚未加载, 稍后重试");
-        return;
-    }
+    if (!base) return false;
 
-    void *target = (void *)(base + RVA_ADDTEXT_BLR);
-    int r = DobbyInstrument(target, onAddText);
-    LOG(@"Hook @ %p (base=%p RVA=0x%lx) 结果=%d", target, (void *)base, (unsigned long)RVA_ADDTEXT_BLR, r);
-    if (r == 0) {
-        installed = true;
-        LOG(@"Hook 安装成功, 开干");
-    } else {
-        LOG(@"Hook 失败 code=%d", r);
+    uintptr_t addr = base + RVA_ADDTEXT_BLR;
+    uint32_t insn = 0;
+    // 只读探测, 不改权限
+    insn = *(volatile uint32_t *)addr;
+
+    if (insn == INSN_BRK_CA8) {
+        g_brk_addr = addr;
+        LOG(@"Flutter BRK 已就位 @ %p (base=%p)", (void *)addr, (void *)base);
+        return true;
     }
+    if (insn == INSN_BLR_X8) {
+        LOG(@"致命: Flutter@%p 仍是 BLR X8, 没打静态 patch! 请替换 Flutter.framework 为 patched 版",
+            (void *)addr);
+        return false;
+    }
+    LOG(@"警告: Flutter@%p 指令=%08x, 既不是 BRK 也不是 BLR, 版本可能变了",
+        (void *)addr, insn);
+    // 仍然挂上, 万一用户用了别的 imm
+    if ((insn & 0xFFE0001F) == 0xD4200000) {
+        g_brk_addr = addr;
+        LOG(@"检测到其他 BRK, 继续挂异常处理");
+        return true;
+    }
+    return false;
 }
 
-// dyld 镜像加载回调: Flutter 可能比我们晚加载
+// ---------------------------------------------------------------------------
+//  EXC_BREAKPOINT 异常处理 (不写代码页, iOS 26 安全)
+//  命中我们的 BRK 后:
+//    1) 用 x1 做文本替换
+//    2) 模拟 BLR X8: LR=PC+4, PC=X8
+// ---------------------------------------------------------------------------
+#pragma pack(push, 4)
+typedef struct {
+    mach_msg_header_t head;
+    mach_msg_body_t msgh_body;
+    mach_msg_port_descriptor_t thread;
+    mach_msg_port_descriptor_t task;
+    NDR_record_t NDR;
+    exception_type_t exception;
+    mach_msg_type_number_t codeCnt;
+    int64_t code[2];
+} exc_request_t;
+
+typedef struct {
+    mach_msg_header_t head;
+    NDR_record_t NDR;
+    kern_return_t RetCode;
+} exc_reply_t;
+#pragma pack(pop)
+
+static mach_port_t g_exc_port = MACH_PORT_NULL;
+static exception_mask_t g_old_masks[EXC_TYPES_COUNT];
+static mach_port_t g_old_ports[EXC_TYPES_COUNT];
+static exception_behavior_t g_old_behaviors[EXC_TYPES_COUNT];
+static thread_state_flavor_t g_old_flavors[EXC_TYPES_COUNT];
+static mach_msg_type_number_t g_old_count = 0;
+
+static inline uint64_t ts64_get_pc(const arm_thread_state64_t *s) {
+    return (uint64_t)arm_thread_state64_get_pc(*s);
+}
+static inline uint64_t ts64_get_x(const arm_thread_state64_t *s, int i) {
+    return (uint64_t)arm_thread_state64_get_x(*s, i);
+}
+static inline void ts64_set_pc(arm_thread_state64_t *s, uint64_t v) {
+    // 宏吃 struct lvalue, 不是指针
+    arm_thread_state64_set_pc_fptr(*s, (void *)(uintptr_t)v);
+}
+static inline void ts64_set_lr(arm_thread_state64_t *s, uint64_t v) {
+    arm_thread_state64_set_lr_fptr(*s, (void *)(uintptr_t)v);
+}
+
+static bool handle_breakpoint_thread(mach_port_t thread) {
+    arm_thread_state64_t st;
+    mach_msg_type_number_t cnt = ARM_THREAD_STATE64_COUNT;
+    kern_return_t kr = thread_get_state(thread, ARM_THREAD_STATE64, (thread_state_t)&st, &cnt);
+    if (kr != KERN_SUCCESS) return false;
+
+    uint64_t pc = ts64_get_pc(&st);
+    // 只认我们的静态 BRK 点, 其它断点放行给系统/Sentry
+    if (!g_brk_addr || (pc & ~0x3ULL) != (g_brk_addr & ~0x3ULL)) {
+        return false;
+    }
+
+    uint64_t x1 = ts64_get_x(&st, 1);
+    uint64_t x8 = ts64_get_x(&st, 8);
+
+    rewriteAddTextBuf(x1);
+
+    // 模拟 BLR X8: LR = 下一条, PC = X8
+    if (x8 == 0) {
+        ts64_set_pc(&st, pc + 4);
+    } else {
+        ts64_set_lr(&st, pc + 4);
+        ts64_set_pc(&st, x8);
+    }
+
+    cnt = ARM_THREAD_STATE64_COUNT;
+    kr = thread_set_state(thread, ARM_THREAD_STATE64, (thread_state_t)&st, cnt);
+    return kr == KERN_SUCCESS;
+}
+
+static void *exc_server_thread(void *arg) {
+    (void)arg;
+    LOG(@"异常处理线程启动");
+
+    for (;;) {
+        uint8_t storage[2048];
+        memset(storage, 0, sizeof(storage));
+        mach_msg_header_t *hdr = (mach_msg_header_t *)storage;
+
+        kern_return_t kr = mach_msg(hdr,
+                                    MACH_RCV_MSG,
+                                    0,
+                                    sizeof(storage),
+                                    g_exc_port,
+                                    MACH_MSG_TIMEOUT_NONE,
+                                    MACH_PORT_NULL);
+        if (kr != KERN_SUCCESS) {
+            LOG(@"mach_msg rcv 失败: %d", kr);
+            continue;
+        }
+
+        // EXCEPTION_DEFAULT | MACH_EXCEPTION_CODES 请求布局
+        exc_request_t *req = (exc_request_t *)storage;
+        bool handled = false;
+
+        if (req->exception == EXC_BREAKPOINT) {
+            if (!g_brk_addr) ensureBrkTarget();
+            handled = handle_breakpoint_thread(req->thread.name);
+        }
+
+        exc_reply_t reply;
+        memset(&reply, 0, sizeof(reply));
+        reply.head.msgh_bits = MACH_MSGH_BITS(MACH_MSGH_BITS_REMOTE(hdr->msgh_bits), 0);
+        reply.head.msgh_remote_port = hdr->msgh_remote_port;
+        reply.head.msgh_local_port = MACH_PORT_NULL;
+        reply.head.msgh_size = sizeof(reply);
+        reply.head.msgh_id = hdr->msgh_id + 100;
+        reply.NDR = NDR_record;
+        // 我们的 BRK → SUCCESS 恢复线程; 其它 → FAILURE 让内核走 fatal/其它逻辑
+        reply.RetCode = handled ? KERN_SUCCESS : KERN_FAILURE;
+
+        mach_msg(&reply.head, MACH_SEND_MSG | MACH_SEND_TIMEOUT,
+                 sizeof(reply), 0, MACH_PORT_NULL, 0, MACH_PORT_NULL);
+    }
+    return NULL;
+}
+
+static bool installExceptionHandler() {
+    if (atomic_load(&g_exc_ready)) return true;
+
+    if (!ensureBrkTarget()) {
+        LOG(@"BRK 目标未就绪, 稍后重试异常处理安装");
+        return false;
+    }
+
+    kern_return_t kr;
+
+    // 保存旧 ports (Sentry 等)
+    g_old_count = EXC_TYPES_COUNT;
+    kr = task_get_exception_ports(mach_task_self(),
+                                  EXC_MASK_BREAKPOINT,
+                                  g_old_masks,
+                                  &g_old_count,
+                                  g_old_ports,
+                                  g_old_behaviors,
+                                  g_old_flavors);
+    if (kr != KERN_SUCCESS) {
+        LOG(@"task_get_exception_ports 失败: %d", kr);
+        g_old_count = 0;
+    }
+
+    kr = mach_port_allocate(mach_task_self(), MACH_PORT_RIGHT_RECEIVE, &g_exc_port);
+    if (kr != KERN_SUCCESS) {
+        LOG(@"mach_port_allocate 失败: %d", kr);
+        return false;
+    }
+    kr = mach_port_insert_right(mach_task_self(), g_exc_port, g_exc_port, MACH_MSG_TYPE_MAKE_SEND);
+    if (kr != KERN_SUCCESS) {
+        LOG(@"mach_port_insert_right 失败: %d", kr);
+        return false;
+    }
+
+    kr = task_set_exception_ports(mach_task_self(),
+                                  EXC_MASK_BREAKPOINT,
+                                  g_exc_port,
+                                  (exception_behavior_t)(EXCEPTION_DEFAULT | MACH_EXCEPTION_CODES),
+                                  ARM_THREAD_STATE64);
+    if (kr != KERN_SUCCESS) {
+        LOG(@"task_set_exception_ports 失败: %d", kr);
+        return false;
+    }
+
+    pthread_t th;
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+    int pe = pthread_create(&th, &attr, exc_server_thread, NULL);
+    pthread_attr_destroy(&attr);
+    if (pe != 0) {
+        LOG(@"pthread_create 失败: %d", pe);
+        return false;
+    }
+
+    atomic_store(&g_exc_ready, true);
+    LOG(@"EXC_BREAKPOINT 处理已安装 (无 runtime 写码, iOS26 友好)");
+    return true;
+}
+
 static void onImageAdded(const struct mach_header *mh, intptr_t slide) {
     (void)mh;
     (void)slide;
-    tryInstallHook();
+    if (!atomic_load(&g_exc_ready)) {
+        installExceptionHandler();
+    } else {
+        ensureBrkTarget();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -881,7 +1091,7 @@ static void onImageAdded(const struct mach_header *mh, intptr_t slide) {
 // ---------------------------------------------------------------------------
 __attribute__((constructor))
 static void ibox_hook_init() {
-    LOG(@"加载中... build v2 (inplace-v6)");
+    LOG(@"加载中... build v3 (BRK+exc, no-dobby)");
 
     writeTemplateIfNeeded();
     loadConfig();
@@ -895,16 +1105,25 @@ static void ibox_hook_init() {
     dispatch_source_set_event_handler(timer, ^{ loadConfig(); });
     dispatch_resume(timer);
 
-    // 立刻试一次 + 监听后续镜像
-    tryInstallHook();
-    _dyld_register_func_for_add_image(onImageAdded);
+    // 异常处理 (依赖静态 patch 过的 Flutter)
+    if (!installExceptionHandler()) {
+        _dyld_register_func_for_add_image(onImageAdded);
+        // 再兜底轮询几次
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1ull * NSEC_PER_SEC),
+                       dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+                           installExceptionHandler();
+                       });
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 3ull * NSEC_PER_SEC),
+                       dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+                           installExceptionHandler();
+                       });
+    }
 
     // 延迟挂悬浮球, 等 UIApplication/Scene 起来
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 4ull * NSEC_PER_SEC),
                    dispatch_get_main_queue(), ^{
                        installFloatingBall();
                    });
-    // 再兜底一次, 防止第一次 scene 还没好
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 10ull * NSEC_PER_SEC),
                    dispatch_get_main_queue(), ^{
                        if (!g_floatWin) installFloatingBall();

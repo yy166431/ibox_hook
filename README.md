@@ -1,121 +1,100 @@
-# ibox_hook
+# ibox_hook v3
 
-**爱盒 (com.aihe.abc) 显示文本/数字修改器** — 截图录屏用。悬浮球改规则，注入即用。
+**爱盒 (com.aihe.abc) 显示文本/数字修改器** — 截图录屏用。iOS 26 轻松签可用。
 
-## 原理
+## 重要：iOS 26 为什么 v2 会崩
 
-爱盒是 Flutter AOT，UI 全走 Skia Canvas，没有 UILabel 可 hook。所有显示文字都过引擎 **ParagraphBuilder::addText**，以 UTF-16 明文进排版。
+v2 用 Dobby **运行时改** `Flutter.__TEXT` → 页变成 `rw-` → 内核 `CODESIGNING / Invalid Page` 直接 `SIGKILL`。
 
-本插件在 `Flutter.framework` RVA **`0x481ca8`**（`blr x8` 前，`x1 = &UTF16Buf`）用 **Dobby** inline hook 拦截，按规则**原地改写**缓冲区。
+**v3 方案**：
 
-### 写回策略（Frida v6 真机验证）
+1. **离线**把 `Flutter.framework/Flutter` @ `0x481ca8` 的 `BLR X8` 打成 `BRK #0xCA8`
+2. dylib **只**注册 `EXC_BREAKPOINT` 异常处理：改 `x1` 文本 + 模拟 `BLR X8`（`LR=PC+4, PC=X8`）
+3. **运行时绝不写代码页**
 
-- **不改** mode bit / ptr / capacity（改了必崩）
-- **External**：写 chars 到 ptr，更新 `len@+8`（clamp 到 capacity）
-- **Inline**：写 chars 到 buf，更新 `flag = len & 0x7f`，最多 11 个 UTF-16 字符
+## 安装（轻松签）
 
-## 使用（轻松签 / 免越狱）
+### 你需要两个文件
 
-### 1. 下载 dylib
+| 文件 | 作用 |
+|------|------|
+| `iboxhook.dylib` | 异常处理 + 悬浮球 UI |
+| `Flutter`（patched） | 静态 BRK，替换原 `Flutter.framework/Flutter` |
 
-[Releases](https://github.com/yy166431/ibox_hook/releases) 或 [Actions](https://github.com/yy166431/ibox_hook/actions) 下最新 **iboxhook.dylib**。
+### 步骤
 
-### 2. 注入 IPA
+1. 解压爱盒 IPA  
+2. **替换**  
+   `Payload/Runner.app/Frameworks/Flutter.framework/Flutter`  
+   为仓库/本地打好的 `Flutter.patched`（或自己跑 patch 脚本）  
+3. **注入** `iboxhook.dylib`（轻松签「注入 dylib」，或手动丢 Frameworks + `insert_dylib`）  
+4. **删除** `Info.plist` 的 `UISupportedDevices`（原版锁 XR/11）  
+5. 重打包 → 轻松签签名安装  
 
-轻松签：
+### 自己 patch Flutter
 
-1. 导入爱盒 IPA（解密版）
-2. **删 Info.plist 的 `UISupportedDevices`**（原版锁 XR/11，不删装不了新机）
-3. 注入 `iboxhook.dylib`
-4. 签名安装
-
-手动：
-
-```
-Payload/Runner.app/Frameworks/iboxhook.dylib
-# insert_dylib / optool 给 Runner 加:
-#   LC_LOAD_DYLIB @rpath/iboxhook.dylib
-```
-
-### 3. 改规则
-
-启动 App 约 4 秒后右上角出现蓝色 **「爱盒」** 悬浮球：
-
-- **点一下** → 规则编辑器
-- **拖动** → 换位置
-- **截图/录屏** → 自动隐藏，不入镜
-
-配置落盘：
-
-```
-App沙盒/Documents/ibox_hook_rules.json
+```bash
+python tools/patch_flutter.py \
+  Payload/Runner.app/Frameworks/Flutter.framework/Flutter \
+  -o Flutter.patched
+# 校验通过后覆盖回 Flutter.framework/Flutter
 ```
 
-首次自动生成模板（含 v6 验证过的示例规则）。保存后**立即生效**；服务器下发的静态数字需**重进页面**触发 `addText`。
+期望日志：
 
-#### JSON 字段
+```
+RVA  0x481ca8
+was  0xd63f0100  BLR X8
+now  0xd4219500  BRK #0xca8
+```
+
+若提示指令不匹配 = App 换引擎了，要重找偏移。
+
+## 使用
+
+启动约 4 秒后右上角蓝色 **「爱盒」** 悬浮球：
+
+- 点一下 → 规则编辑器（精确/正则/钱包/总开关）
+- 拖动换位；截图/录屏自动隐藏
+- 配置：`Documents/ibox_hook_rules.json`（2 秒热加载）
+- 静态数字需**重进页面**才会再走 `addText`
+
+### 规则字段
 
 | 字段 | 说明 |
 |------|------|
 | `enabled` | 总开关 |
-| `exact` | 精确整串优先，否则**包含**替换（长 key 优先） |
-| `regex` | `pattern` / `replace` 数组 |
-| `wallet` | 所有 `0x…` 钱包统一替换，**保持原长度**（截断/填充） |
-
-示例：
-
-```json
-{
-  "enabled": true,
-  "exact": {
-    "289": "999",
-    "2632": "9999",
-    "552": "999",
-    "红苹果": "非常牛逼"
-  },
-  "regex": [
-    {"pattern": "持有\\s*\\d+", "replace": "持有9999"},
-    {"pattern": "¥\\s*[\\d,.]+", "replace": "¥88888"}
-  ],
-  "wallet": "0x8888888888888888888888888888888888888888"
-}
-```
+| `exact` | 整串优先，否则包含替换（长 key 优先） |
+| `regex` | `pattern` / `replace` |
+| `wallet` | `0x…` 钱包，**保长**截断/填充 |
 
 ## 技术
 
 | 项 | 值 |
 |----|-----|
-| Bundle | `com.aihe.abc`（进程名 Runner） |
-| 架构 | arm64 |
-| Hook | Dobby 静态链接，无 substrate 依赖（sideload OK） |
-| 配置 | 每 2s 热加载 mtime |
-| 最低 iOS | 14.0 |
-
-## 限制
-
-- **只改显示，不改数据/接口**
-- RVA `0x481ca8` 锁当前 Flutter 引擎；App 大更新引擎可能要重找偏移
-- Inline 缓冲最长 11 字符；更长替换在 inline 模式会被截断
-- 反调试：不要 `frida -f` spawn，正常启动再 attach / 直接注入 dylib
+| Bundle | `com.aihe.abc`（进程 Runner） |
+| Hook | 静态 `BRK #0xCA8` @ RVA `0x481ca8` + `EXC_BREAKPOINT` |
+| 写回 | UTF16Buf 原地，不改 mode/ptr/capacity |
+| 依赖 | 系统库 only，**无 Dobby / 无 substrate** |
+| 最低 iOS | 14；真机验证目标 iOS 26.5 + 轻松签 |
 
 ## 构建
 
 ```bash
-# GitHub Actions: push main 或手动 workflow_dispatch
-# 本地 (macOS + Xcode):
+# Actions: push main
+# 本地:
 SDK=$(xcrun --sdk iphoneos --show-sdk-path)
-# 先准备 libdobby.a + dobby.h
 clang++ -arch arm64 -isysroot "$SDK" -miphoneos-version-min=14.0 \
-  -std=c++17 -fobjc-arc -dynamiclib \
+  -std=c++17 -fobjc-arc -O2 -dynamiclib \
   -framework Foundation -framework UIKit -framework CoreGraphics \
   -install_name "@rpath/iboxhook.dylib" \
-  hook.mm libdobby.a -o iboxhook.dylib
+  hook.mm -o iboxhook.dylib
 ldid -S iboxhook.dylib
 ```
 
 ## 作者
 
-海鸥 — Flutter stripped engine 扒了一天，addText 的 blr 点是老子用命换的。
+海鸥 — iOS 26 代码签把 Dobby 干废了，老子改 BRK 异常处理。
 
 ## License
 

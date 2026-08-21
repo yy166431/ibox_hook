@@ -11,6 +11,6 @@ iboxhook_FILES = hook.mm
 iboxhook_CFLAGS = -fobjc-arc -Wno-unused-variable -Wno-unused-function
 iboxhook_CCFLAGS = -std=c++17
 iboxhook_FRAMEWORKS = Foundation UIKit CoreGraphics
-iboxhook_LIBRARIES = dobby
+# v3: 无 dobby, 靠静态 BRK + 异常处理
 
 include $(THEOS_MAKE_PATH)/tweak.mk
