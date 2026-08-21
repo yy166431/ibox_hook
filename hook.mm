@@ -20,8 +20,8 @@
 #include <pthread.h>
 #include <string.h>
 #include <stdlib.h>
-#include <stdatomic.h>
 #include <algorithm>
+#include <atomic>
 #include <string>
 #include <vector>
 #include <map>
@@ -62,7 +62,7 @@ static std::string g_wallet_utf8;
 static time_t g_cfg_mtime = 0;
 static bool g_enabled = true;
 static int g_hit_count = 0;
-static _Atomic(RuleSnap *) g_snap = nullptr;
+static std::atomic<RuleSnap *> g_snap{nullptr};
 
 static char16_t *u8_to_u16_heap(const char *u8, uint16_t *outLen) {
     *outLen = 0;
@@ -99,7 +99,7 @@ static void publishSnap(const std::map<std::string, std::string> &exact,
     }
     if (!wallet.empty()) s->wallet = u8_to_u16_heap(wallet.c_str(), &s->walletLen);
 
-    (void)atomic_exchange(&g_snap, s); // 旧快照不 free (异常线程可能还在读)
+    (void)g_snap.exchange(s, std::memory_order_acq_rel); // 旧快照不 free
 
     std::lock_guard<std::mutex> lk(g_mu);
     g_exact_utf8 = exact;
@@ -165,7 +165,7 @@ static inline bool looksLikeWalletU16(const char16_t *s, size_t n) {
 // ★ 异常热路径: 禁止 ObjC / mutex / malloc / regex / LOG
 static void rewriteAddTextBuf(uint64_t x1) {
     if (!x1) return;
-    RuleSnap *snap = atomic_load(&g_snap);
+    RuleSnap *snap = g_snap.load(std::memory_order_acquire);
     if (!snap || !snap->enabled) return;
 
     UTF16Buf *buf = (UTF16Buf *)x1;
@@ -514,8 +514,8 @@ static uintptr_t findFlutterBase() {
 }
 
 static uintptr_t g_hook_addr = 0;
-static _Atomic bool g_exc_ready = false;
-static _Atomic bool g_hwbp_ok = false;
+static std::atomic<bool> g_exc_ready{false};
+static std::atomic<bool> g_hwbp_ok{false};
 
 #ifndef ARM_DEBUG_STATE64
 #define ARM_DEBUG_STATE64 15
@@ -666,7 +666,7 @@ static void *exc_thread(void *arg) {
 }
 
 static bool installExc() {
-    if (atomic_load(&g_exc_ready)) return true;
+    if (g_exc_ready.load(std::memory_order_acquire)) return true;
     if (!ensureHookTarget()) return false;
     if (mach_port_allocate(mach_task_self(), MACH_PORT_RIGHT_RECEIVE, &g_exc_port) != KERN_SUCCESS)
         return false;
@@ -680,17 +680,17 @@ static bool installExc() {
     pthread_attr_init(&a); pthread_attr_setdetachstate(&a, PTHREAD_CREATE_DETACHED);
     if (pthread_create(&th, &a, exc_thread, nullptr) != 0) { pthread_attr_destroy(&a); return false; }
     pthread_attr_destroy(&a);
-    atomic_store(&g_exc_ready, true);
+    g_exc_ready.store(true, std::memory_order_release);
     LOG(@"EXC_BREAKPOINT OK");
     return true;
 }
 
 static bool installHWBP() {
     if (!ensureHookTarget()) return false;
-    if (!atomic_load(&g_exc_ready) && !installExc()) return false;
+    if (!g_exc_ready.load(std::memory_order_acquire) && !installExc()) return false;
     int n = applyHwBpAllThreads();
     if (n > 0) {
-        atomic_store(&g_hwbp_ok, true);
+        g_hwbp_ok.store(true, std::memory_order_release);
         LOG(@"HWBP x%d @ %p", n, (void *)g_hook_addr);
         return true;
     }
@@ -700,7 +700,7 @@ static bool installHWBP() {
 
 static void onImage(const struct mach_header *mh, intptr_t s) {
     (void)mh; (void)s;
-    if (!atomic_load(&g_hwbp_ok)) installHWBP();
+    if (!g_hwbp_ok.load(std::memory_order_acquire)) installHWBP();
     else applyHwBpAllThreads();
 }
 
@@ -717,7 +717,7 @@ static void ibox_hook_init() {
     dispatch_resume(cfg);
 
     auto tryI = ^{
-        if (!atomic_load(&g_hwbp_ok)) installHWBP();
+        if (!g_hwbp_ok.load(std::memory_order_acquire)) installHWBP();
         else applyHwBpAllThreads();
     };
     tryI();
